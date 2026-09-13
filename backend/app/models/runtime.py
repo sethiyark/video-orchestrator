@@ -1,71 +1,145 @@
 """Child-only heavy dependencies. Never import this module into the API server."""
 
 import json
+import math
 import os
 import re
 import signal
 import sys
 from pathlib import Path
 
+from .fidelity import fidelity
 
-def infer(spec, snapshot, payload):
-    root = Path(snapshot)
-    runtime = spec["runtime"]
-    if runtime == "llama_cpp":
-        from llama_cpp import Llama
+SENTENCE_SPLIT = r"(?<=[.!?])\s+|\n+"
+SAMPLE_RATE = 24000
 
-        model = Llama(
-            model_path=str(root / spec["filename"]),
-            n_ctx=spec["context_size"],
-            n_gpu_layers=spec["gpu_layers"] if spec["device"] == "cuda" else 0,
-            verbose=False,
+
+def _torch_device(device):
+    """Map the config device onto a torch device string."""
+    return "mps" if device == "metal" else device
+
+
+def _sentences(text):
+    return [s for s in re.split(SENTENCE_SPLIT, text) if s.strip()]
+
+
+def _generate_json(model, spec, request, schemas):
+    """Grammar-constrained decode, validated in-process; one repair pass on failure."""
+    schema_cls = getattr(schemas, request["schema_name"])
+    schema = schema_cls.model_json_schema()
+    messages = [dict(message) for message in request["messages"]]
+    if spec.get("think_toggle") and messages and messages[0]["role"] == "system":
+        messages[0]["content"] = f"{messages[0]['content']} {spec['think_toggle']}"
+    error, content = None, ""
+    for attempt in range(2):
+        if error:
+            messages = messages + [
+                {"role": "assistant", "content": (content or "")[:4000]},
+                {
+                    "role": "user",
+                    "content": f"Your previous output was invalid: {error}. Return corrected JSON only.",
+                },
+            ]
+        response = model.create_chat_completion(
+            messages=messages,
+            max_tokens=spec["max_tokens"],
+            temperature=request.get("temperature", 0.3),
+            seed=request.get("seed", 42),
+            response_format={"type": "json_object", "schema": schema},
         )
+        choice = response["choices"][0]
+        content = choice["message"]["content"]
         try:
-            response = model.create_chat_completion(
-                messages=payload["messages"],
-                max_tokens=spec["max_tokens"],
-                temperature=0.3,
-                seed=42,
-                response_format={"type": "json_object", "schema": payload["schema"]},
-            )
-            choice = response["choices"][0]
             if choice.get("finish_reason") == "length":
                 raise ValueError(
                     "Model output reached max_tokens; increase the limit or shorten the input"
                 )
-            return {"result": json.loads(choice["message"]["content"])}
+            return {
+                "result": schema_cls.model_validate(json.loads(content)).model_dump(),
+                "repaired": attempt > 0,
+            }
+        except (ValueError, json.JSONDecodeError) as exc:
+            error = f"{type(exc).__name__}: {str(exc)[:600]}"
+    return {"error": error, "kind": "validation"}
+
+
+def infer(spec, snapshot, payload, extras=None):
+    root = Path(snapshot)
+    extras = extras or {}
+    runtime = spec["runtime"]
+    if runtime == "llama_cpp":
+        from llama_cpp import Llama
+
+        from .. import schemas
+
+        model = Llama(
+            model_path=str(root / spec["filename"]),
+            n_ctx=spec["context_size"],
+            n_gpu_layers=spec["gpu_layers"]
+            if spec["device"] in ("cuda", "metal")
+            else 0,
+            verbose=False,
+        )
+        try:
+            return {
+                "results": [
+                    _generate_json(model, spec, request, schemas)
+                    for request in payload["requests"]
+                ]
+            }
         finally:
             model.close()
-    if runtime == "kokoro":
+    if runtime in ("kokoro", "qwen_tts"):
         import numpy as np
         import soundfile as sf
-        import spacy
 
-        # Prevent Misaki's automatic language-model download in an inference job.
-        spacy.load("en_core_web_sm")
-        from kokoro import KModel, KPipeline
+        device = _torch_device(spec["device"])
+        if runtime == "kokoro":
+            import spacy
 
-        model = (
-            KModel(
-                repo_id=spec["repo_id"],
-                config=str(root / "config.json"),
-                model=str(root / spec["filename"]),
+            # Prevent Misaki's automatic language-model download in an inference job.
+            spacy.load("en_core_web_sm")
+            from kokoro import KModel, KPipeline
+
+            model = (
+                KModel(
+                    repo_id=spec["repo_id"],
+                    config=str(root / "config.json"),
+                    model=str(root / spec["filename"]),
+                )
+                .to(device)
+                .eval()
             )
-            .to(spec["device"])
-            .eval()
-        )
-        pipeline = KPipeline(lang_code="a", repo_id=spec["repo_id"], model=model)
-        pieces, segments, cursor = [], [], 0.0
-        for sentence in re.split(r"(?<=[.!?])\s+|\n+", payload["text"]):
-            if not sentence.strip():
-                continue
-            for text, _, audio in pipeline(
-                sentence,
-                voice=str(root / "voices" / f"{spec['voice']}.pt"),
-                speed=spec["speed"],
-            ):
-                samples = audio.cpu().numpy()
-                duration = len(samples) / 24000
+            pipeline = KPipeline(lang_code="a", repo_id=spec["repo_id"], model=model)
+            voice = spec["voice"]
+
+            def synthesize(sentence):
+                for text, _, audio in pipeline(
+                    sentence,
+                    voice=str(root / "voices" / f"{voice}.pt"),
+                    speed=spec["speed"],
+                ):
+                    yield text, audio.cpu().numpy(), SAMPLE_RATE
+
+        else:
+            import torch
+            from qwen_tts import Qwen3TTSModel
+
+            model = Qwen3TTSModel.from_pretrained(
+                str(root), device_map=device, dtype=torch.bfloat16
+            )
+            voice = spec["speaker"]
+
+            def synthesize(sentence):
+                wavs, rate = model.generate_custom_voice(
+                    text=sentence, language="English", speaker=voice
+                )
+                yield sentence, np.asarray(wavs[0], dtype=np.float32), int(rate)
+
+        pieces, segments, cursor, rate = [], [], 0.0, SAMPLE_RATE
+        for sentence in _sentences(payload["text"]):
+            for text, samples, rate in synthesize(sentence):
+                duration = len(samples) / rate
                 segments.append(
                     {"text": text, "start": cursor, "end": cursor + duration}
                 )
@@ -73,12 +147,12 @@ def infer(spec, snapshot, payload):
                 pieces.append(samples)
         if not pieces:
             raise ValueError("TTS produced no audio")
-        sf.write(payload["output_path"], np.concatenate(pieces), 24000)
+        sf.write(payload["output_path"], np.concatenate(pieces), rate)
         return {
             "duration_seconds": cursor,
-            "sample_rate": 24000,
+            "sample_rate": rate,
             "segments": segments,
-            "voice": spec["voice"],
+            "voice": voice,
             "speed": spec["speed"],
         }
     if runtime == "whisper":
@@ -93,20 +167,79 @@ def infer(spec, snapshot, payload):
         segments, info = model.transcribe(
             payload["audio_path"], language="en", word_timestamps=True, beam_size=5
         )
+        output = [
+            {
+                "text": segment.text,
+                "start": segment.start,
+                "end": segment.end,
+                "words": [
+                    {"word": word.word, "start": word.start, "end": word.end}
+                    for word in (segment.words or [])
+                ],
+            }
+            for segment in segments
+        ]
+        transcript = " ".join(segment["text"] for segment in output)
         return {
-            "segments": [
+            "segments": output,
+            "duration_seconds": info.duration,
+            "method": "asr_transcript",
+            "fidelity": fidelity(payload.get("text", ""), transcript)
+            if payload.get("text")
+            else None,
+        }
+    if runtime == "ctc_aligner":
+        import torch
+        from ctc_forced_aligner import (
+            generate_emissions,
+            get_alignments,
+            get_spans,
+            load_alignment_model,
+            load_audio,
+            postprocess_results,
+            preprocess_text,
+        )
+
+        device = spec["device"]
+        model, tokenizer = load_alignment_model(
+            device,
+            model_path=str(root),
+            dtype=torch.float16 if device == "cuda" else torch.float32,
+        )
+        waveform = load_audio(payload["audio_path"], model.dtype, model.device)
+        emissions, stride = generate_emissions(model, waveform, batch_size=4)
+        tokens, starred = preprocess_text(
+            payload["text"], romanize=True, language="eng"
+        )
+        alignments, scores, blank = get_alignments(emissions, tokens, tokenizer)
+        spans = get_spans(tokens, alignments, blank)
+        words = postprocess_results(starred, spans, stride, scores)
+        if not words:
+            raise ValueError("Forced alignment produced no words")
+        # Group aligned words back into the script's sentences.
+        segments, cursor = [], 0
+        for sentence in _sentences(payload["text"]):
+            count = len(preprocess_text(sentence, romanize=True, language="eng")[1])
+            chunk = words[cursor : cursor + count] or words[-1:]
+            cursor += count
+            segments.append(
                 {
-                    "text": segment.text,
-                    "start": segment.start,
-                    "end": segment.end,
+                    "text": sentence,
+                    "start": chunk[0]["start"],
+                    "end": chunk[-1]["end"],
                     "words": [
-                        {"word": word.word, "start": word.start, "end": word.end}
-                        for word in (segment.words or [])
+                        {"word": w["text"], "start": w["start"], "end": w["end"]}
+                        for w in chunk
                     ],
                 }
-                for segment in segments
-            ],
-            "duration_seconds": info.duration,
+            )
+        mean_score = sum(float(w.get("score", 0.0)) for w in words) / len(words)
+        return {
+            "segments": segments,
+            "duration_seconds": words[-1]["end"],
+            "method": "forced_alignment",
+            # Scores are mean log-probabilities; exp maps them onto 0–1.
+            "fidelity": max(0.0, min(1.0, math.exp(mean_score))),
         }
     if runtime == "sentence_transformers":
         from sentence_transformers import SentenceTransformer
@@ -119,31 +252,77 @@ def infer(spec, snapshot, payload):
                 payload["texts"], normalize_embeddings=True
             ).tolist()
         }
-    if runtime == "diffusers":
+    if runtime in ("diffusers", "diffusers_gguf"):
         import torch
-        from diffusers import StableDiffusionXLPipeline
 
         if spec["device"] != "cuda" or not torch.cuda.is_available():
             raise ValueError(
-                "SDXL requires the configured CUDA host; disable images on CPU hosts"
+                "Image generation requires the configured CUDA host; disable images on CPU hosts"
             )
-        pipeline = StableDiffusionXLPipeline.from_pretrained(
-            str(root),
-            torch_dtype=torch.float16,
-            variant="fp16",
-            use_safetensors=True,
-            local_files_only=True,
-        )
-        pipeline.enable_model_cpu_offload()
-        pipeline.enable_vae_slicing()
-        pipeline.enable_vae_tiling()
-        image = pipeline(
-            payload["prompt"],
-            width=768,
-            height=768,
-            num_inference_steps=25,
-            generator=torch.Generator("cpu").manual_seed(42),
-        ).images[0]
+        generator = torch.Generator("cpu").manual_seed(42)
+        if runtime == "diffusers":
+            from diffusers import StableDiffusionXLPipeline
+
+            pipeline = StableDiffusionXLPipeline.from_pretrained(
+                str(root),
+                torch_dtype=torch.float16,
+                variant="fp16",
+                use_safetensors=True,
+                local_files_only=True,
+            )
+            pipeline.enable_model_cpu_offload()
+            pipeline.enable_vae_slicing()
+            pipeline.enable_vae_tiling()
+            image = pipeline(
+                payload["prompt"],
+                width=768,
+                height=768,
+                num_inference_steps=25,
+                generator=generator,
+            ).images[0]
+        else:
+            from diffusers import (
+                FluxPipeline,
+                FluxTransformer2DModel,
+                GGUFQuantizationConfig,
+            )
+            from transformers import T5EncoderModel
+
+            base = Path(extras["base"]["snapshot"])
+            encoder = extras["text_encoder"]
+            quantization = GGUFQuantizationConfig(compute_dtype=torch.bfloat16)
+            transformer = FluxTransformer2DModel.from_single_file(
+                str(root / spec["filename"]),
+                quantization_config=quantization,
+                config=str(base),
+                subfolder="transformer",
+                torch_dtype=torch.bfloat16,
+            )
+            text_encoder_2 = T5EncoderModel.from_pretrained(
+                encoder["snapshot"],
+                gguf_file=encoder["filename"],
+                torch_dtype=torch.bfloat16,
+                local_files_only=True,
+            )
+            pipeline = FluxPipeline.from_pretrained(
+                str(base),
+                transformer=transformer,
+                text_encoder_2=text_encoder_2,
+                torch_dtype=torch.bfloat16,
+                local_files_only=True,
+            )
+            pipeline.enable_model_cpu_offload()
+            pipeline.enable_vae_slicing()
+            pipeline.enable_vae_tiling()
+            image = pipeline(
+                payload["prompt"],
+                width=768,
+                height=768,
+                num_inference_steps=spec["steps"],
+                guidance_scale=0.0,
+                max_sequence_length=256,
+                generator=generator,
+            ).images[0]
         image.save(payload["output_path"])
         return {"width": 768, "height": 768, "prompt": payload["prompt"], "seed": 42}
     raise ValueError(f"Unsupported runtime: {runtime}")
