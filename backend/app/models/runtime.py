@@ -42,6 +42,33 @@ def grammar_schema(schema):
     return schema
 
 
+def _disable_template_thinking(model):
+    """Render the GGUF chat template with ``enable_thinking=False`` when it supports it.
+
+    Qwen3 ignores a ``/no_think`` soft switch under a JSON grammar: the grammar
+    blocks ``<think>``, so the model writes its reasoning into the first string
+    field instead. The template's own switch pre-fills an empty think block.
+    """
+    template = getattr(model, "metadata", {}).get("tokenizer.chat_template", "")
+    if "enable_thinking" not in template:
+        return
+    from llama_cpp.llama_chat_format import (
+        Jinja2ChatFormatter,
+        chat_formatter_to_chat_completion_handler,
+    )
+
+    eos, bos = model.token_eos(), model.token_bos()
+    formatter = Jinja2ChatFormatter(
+        template=template,
+        eos_token=model._model.token_get_text(eos) if eos != -1 else "",
+        bos_token=model._model.token_get_text(bos) if bos != -1 else "",
+        stop_token_ids=[eos],
+    )
+    model.chat_handler = chat_formatter_to_chat_completion_handler(
+        lambda **kwargs: formatter(**kwargs, enable_thinking=False)
+    )
+
+
 def _generate_json(model, spec, request, schemas):
     """Grammar-constrained decode, validated in-process; one repair pass on failure."""
     schema_cls = getattr(schemas, request["schema_name"])
@@ -102,6 +129,8 @@ def infer(spec, snapshot, payload, extras=None):
             verbose=False,
         )
         try:
+            if spec.get("think_toggle"):
+                _disable_template_thinking(model)
             return {
                 "results": [
                     _generate_json(model, spec, request, schemas)

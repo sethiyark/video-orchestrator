@@ -79,6 +79,54 @@ def test_batch_loads_once_and_appends_think_toggle(llama, tmp_path):
     assert [call[1]["seed"] for call in model.calls] == [1, 2, 3]
 
 
+def test_think_toggle_renders_template_with_thinking_disabled(
+    llama, monkeypatch, tmp_path
+):
+    # Under a JSON grammar Qwen3 ignores /no_think and writes its reasoning into
+    # the first string field; the template switch pre-fills an empty think block.
+    rendered = []
+    chat_format = types.ModuleType("llama_cpp.llama_chat_format")
+
+    class Formatter:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def __call__(self, **kwargs):
+            rendered.append(kwargs)
+
+    chat_format.Jinja2ChatFormatter = Formatter
+    chat_format.chat_formatter_to_chat_completion_handler = lambda formatter: formatter
+    monkeypatch.setitem(sys.modules, "llama_cpp.llama_chat_format", chat_format)
+
+    class Tokens:
+        def token_get_text(self, token):
+            return {1: "<|im_end|>"}[token]
+
+    class TemplatedLlama(FakeLlama):
+        metadata: ClassVar[dict] = {
+            "tokenizer.chat_template": "{% if enable_thinking is false %}{% endif %}"
+        }
+        _model = Tokens()
+
+        def token_eos(self):
+            return 1
+
+        def token_bos(self):
+            return -1
+
+    monkeypatch.setattr(sys.modules["llama_cpp"], "Llama", TemplatedLlama)
+    FakeLlama.responses = [CRITIC, CRITIC]
+    infer(spec(), str(tmp_path), {"requests": [request()]})
+    model = FakeLlama.instances[-1]
+    model.chat_handler(messages=[])
+    assert rendered == [{"messages": [], "enable_thinking": False}]
+    assert model.calls[0][0][0]["content"].endswith("/no_think")
+
+    FakeLlama.instances = []
+    infer(spec(think_toggle=None), str(tmp_path), {"requests": [request()]})
+    assert not hasattr(FakeLlama.instances[-1], "chat_handler")
+
+
 def test_grammar_schema_drops_length_bounds_pydantic_still_enforces(llama, tmp_path):
     from app import schemas
 
