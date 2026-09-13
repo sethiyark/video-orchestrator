@@ -12,7 +12,12 @@ tests.
 - Embeddings stay on CPU.
 - One model worker per database (advisory lock or SQLite file lock).
   `RUN_WORKER=false` for extra API processes.
-- Inference children do not inherit `HF_TOKEN`.
+- Inference children and runtime-install subprocesses do not inherit
+  `HF_TOKEN`.
+- The only install the API runs is `uv sync --extra <extra>` with an extra
+  from `RUNTIME_EXTRAS`. Dashboard overrides are validated as a full
+  `ModelConfig` before they are written and can only touch
+  `OVERRIDABLE_FIELDS`.
 
 ## Publish and Governor
 

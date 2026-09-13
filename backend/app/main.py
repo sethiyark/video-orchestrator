@@ -2,19 +2,21 @@ import asyncio
 import importlib.util
 import logging
 from contextlib import asynccontextmanager, nullcontext, suppress
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from .artifacts import Artifacts
-from .config import CUDA_ONLY_RUNTIMES, Settings
+from .config import CUDA_ONLY_RUNTIMES, OVERRIDABLE_FIELDS, RUNTIME_EXTRAS, Settings
 from .infra import RedisGateway
 from .local_provider import IntegrationUnavailable, LocalProvider, ReviewRequired
 from .models.hub import ModelHub, ModelNotReady
+from .models.setup import SetupBusy, SetupManager
 from .observability import configure_logging, render_metrics
 from .orchestrator.client import check_temporal
 from .providers import MockProvider, Provider
@@ -23,6 +25,23 @@ from .storage import build_object_store
 from .store import Store
 
 logger = logging.getLogger(__name__)
+
+CONFIG_CHANGED = (
+    "Model configuration changed since this job was created. "
+    "Restart the pipeline to run from scratch with the current models."
+)
+
+# Runtime name → importable module used to report "runtime installed".
+RUNTIME_MODULES = {
+    "llama_cpp": "llama_cpp",
+    "kokoro": "kokoro",
+    "qwen_tts": "qwen_tts",
+    "whisper": "faster_whisper",
+    "ctc_aligner": "ctc_forced_aligner",
+    "sentence_transformers": "sentence_transformers",
+    "diffusers": "diffusers",
+    "diffusers_gguf": "diffusers",
+}
 
 
 async def _probe(operation):
@@ -63,6 +82,35 @@ class JobInput(BaseModel):
         return sources
 
 
+def _explain(exc: Exception) -> str:
+    """Compact pydantic errors to `models.role.field: message` for the dashboard."""
+    if not isinstance(exc, ValidationError):
+        return str(exc)
+    parts = []
+    for error in exc.errors(include_url=False, include_input=False):
+        location = ".".join(str(item) for item in error["loc"])
+        message = error["msg"].removeprefix("Value error, ")
+        parts.append(f"{location}: {message}" if location else message)
+    return "; ".join(parts)
+
+
+class ModelOverride(BaseModel):
+    """Per-role override saved to the overlay file. Unset fields are left untouched."""
+
+    model_config = ConfigDict(extra="forbid")
+    repo_id: str | None = Field(default=None, min_length=1)
+    revision: str | None = Field(default=None, min_length=1)
+    filename: str | None = None
+    files: list[str] | None = Field(default=None, min_length=1)
+    device: Literal["cpu", "cuda", "metal"] | None = None
+    gpu_layers: int | None = None
+    context_size: int | None = None
+    max_tokens: int | None = None
+    voice: str | None = None
+    speed: float | None = None
+    steps: int | None = None
+
+
 def create_app(
     db_path: str | None = None, provider: Provider | None = None, settings=None
 ):
@@ -75,6 +123,7 @@ def create_app(
         LocalProvider(settings, store) if settings.mode == "local" else MockProvider()
     )
     hub = ModelHub(settings.cache_dir)
+    setup = SetupManager(hub)
     artifacts = Artifacts(settings.artifact_dir)
 
     async def process(job):
@@ -86,16 +135,12 @@ def create_app(
             if settings.mode == "local" and job.get("config_hash") != getattr(
                 provider, "config_hash", None
             ):
-                raise ReviewRequired(
-                    "Model configuration changed since this job was created. Restore it or create a new draft to avoid mixing outputs."
-                )
+                raise ReviewRequired(CONFIG_CHANGED)
             for stage in job["stages"]:
                 if settings.mode == "local" and job.get("config_hash") != getattr(
                     provider, "config_hash", None
                 ):
-                    raise ReviewRequired(
-                        "Model configuration or prepared weights changed. Restore them or create a new draft."
-                    )
+                    raise ReviewRequired(CONFIG_CHANGED)
                 if stage["status"] == "completed":
                     continue
                 if stage["name"] == "upload" and not job["approved_at"]:
@@ -182,6 +227,8 @@ def create_app(
 
     app = FastAPI(title="Video Orchestrator", lifespan=lifespan)
     app.state.store = store
+    app.state.hub = hub
+    app.state.setup = setup
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.origins,
@@ -254,18 +301,8 @@ def create_app(
             "storage_backend": settings.storage_backend,
         }
 
-    @app.get("/api/models")
-    async def models():
-        modules = {
-            "llama_cpp": "llama_cpp",
-            "kokoro": "kokoro",
-            "qwen_tts": "qwen_tts",
-            "whisper": "faster_whisper",
-            "ctc_aligner": "ctc_forced_aligner",
-            "sentence_transformers": "sentence_transformers",
-            "diffusers": "diffusers",
-            "diffusers_gguf": "diffusers",
-        }
+    def models_payload():
+        importlib.invalidate_caches()
         result = []
         for role, spec in settings.models.models.items():
             try:
@@ -273,6 +310,7 @@ def create_app(
                 cached, revision = True, manifest["revision"]
             except (ModelNotReady, OSError, ValueError, KeyError):
                 cached, revision = False, None
+            extra = RUNTIME_EXTRAS[spec.runtime]
             result.append(
                 {
                     "role": role,
@@ -281,7 +319,9 @@ def create_app(
                     "device": spec.device,
                     "cached": cached,
                     "revision": revision,
-                    "runtime_installed": importlib.util.find_spec(modules[spec.runtime])
+                    "runtime_installed": importlib.util.find_spec(
+                        RUNTIME_MODULES[spec.runtime]
+                    )
                     is not None,
                     "stages": [
                         stage
@@ -290,6 +330,14 @@ def create_app(
                     ],
                     "enabled": spec.runtime not in CUDA_ONLY_RUNTIMES
                     or settings.models.images_enabled,
+                    "extra": extra,
+                    "install_command": f"uv sync --extra {extra}",
+                    "overridden": bool(settings.override_for(role)),
+                    "spec": spec.model_dump(include=set(OVERRIDABLE_FIELDS)),
+                    "setup": {
+                        "download": setup.status(f"download:{role}"),
+                        "install": setup.status(f"install:{extra}"),
+                    },
                 }
             )
         runner = getattr(provider, "runner", None)
@@ -300,7 +348,69 @@ def create_app(
             if runner and hasattr(runner, "gpu")
             else {"active": None, "queued": []},
             "images_enabled": settings.models.images_enabled,
+            "setup_running": setup.any_running(),
+            "overlay_path": str(settings.model_overlay_path),
         }
+
+    def get_spec(role):
+        spec = settings.models.models.get(role)
+        if spec is None:
+            raise HTTPException(404, "Unknown model role")
+        return spec
+
+    def reject_if_downloading(role):
+        if setup.is_running(f"download:{role}"):
+            raise HTTPException(
+                409, f"Wait for the {role} download to finish before changing it"
+            )
+
+    @app.get("/api/models")
+    async def models():
+        return models_payload()
+
+    @app.post("/api/models/{role}/download", status_code=202)
+    async def download_model(role: str):
+        spec = get_spec(role)
+        if spec.runtime in CUDA_ONLY_RUNTIMES and not settings.models.images_enabled:
+            raise HTTPException(409, "Enable images in the model profile first")
+        try:
+            snapshot = setup.start_download(role, spec)
+        except SetupBusy as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return {"role": role, "setup": snapshot}
+
+    @app.post("/api/models/{role}/install-runtime", status_code=202)
+    async def install_runtime(role: str):
+        spec = get_spec(role)
+        extra = RUNTIME_EXTRAS[spec.runtime]
+        try:
+            snapshot = setup.start_install(extra)
+        except SetupBusy as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return {"role": role, "extra": extra, "setup": snapshot}
+
+    @app.post("/api/models/{role}/config")
+    async def configure_model(role: str, body: ModelOverride):
+        get_spec(role)
+        reject_if_downloading(role)
+        fields = body.model_dump(exclude_unset=True)
+        if not fields:
+            raise HTTPException(422, "No override fields supplied")
+        try:
+            settings.save_override(role, fields)
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(422, _explain(exc)) from exc
+        return models_payload()
+
+    @app.post("/api/models/{role}/config/reset")
+    async def reset_model(role: str):
+        get_spec(role)
+        reject_if_downloading(role)
+        try:
+            settings.reset_override(role)
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(422, _explain(exc)) from exc
+        return models_payload()
 
     @app.get("/api/jobs")
     async def list_jobs():
@@ -338,16 +448,38 @@ def create_app(
             raise HTTPException(404, "Artifact not found")
         return FileResponse(path, filename=artifact_id)
 
-    @app.post("/api/jobs/{job_id}/run")
-    async def run(job_id: str):
-        job = get_job(job_id)
+    def require_same_mode(job):
         if job.get("mode", "mock") != settings.mode:
             raise HTTPException(
                 409, "Job belongs to a different provider mode; create a new draft"
             )
+
+    def config_stale(job):
+        return settings.mode == "local" and job.get("config_hash") != getattr(
+            provider, "config_hash", None
+        )
+
+    @app.post("/api/jobs/{job_id}/run")
+    async def run(job_id: str):
+        job = get_job(job_id)
+        require_same_mode(job)
+        if config_stale(job):
+            raise HTTPException(409, CONFIG_CHANGED)
         result = store.transition(job_id, ["draft", "failed"], "queued")
         if result is None:
             raise HTTPException(409, "Only draft or failed jobs can be started")
+        return result
+
+    @app.post("/api/jobs/{job_id}/restart")
+    async def restart(job_id: str):
+        job = get_job(job_id)
+        require_same_mode(job)
+        result = store.restart(job_id, getattr(provider, "config_hash", None))
+        if result is None:
+            raise HTTPException(
+                409,
+                "Only draft, failed, awaiting-approval, or completed jobs can be restarted",
+            )
         return result
 
     @app.post("/api/jobs/{job_id}/approve")

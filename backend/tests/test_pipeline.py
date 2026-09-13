@@ -65,6 +65,21 @@ def test_retry_resumes_completed_stages(tmp_path):
         assert provider.calls.count("script") == 2
 
 
+def test_restart_replays_completed_stages(tmp_path):
+    provider = MockProvider(0)
+    with TestClient(create_app(str(tmp_path / "jobs.db"), provider)) as client:
+        job_id = client.post("/api/jobs", json={"title": "Restart example"}).json()[
+            "id"
+        ]
+        client.post(f"/api/jobs/{job_id}/run")
+        wait(client, job_id, "awaiting_approval")
+        assert client.post(f"/api/jobs/{job_id}/run").status_code == 409
+        restarted = client.post(f"/api/jobs/{job_id}/restart").json()
+        assert restarted["status"] == "queued"
+        assert all(stage["status"] == "pending" for stage in restarted["stages"])
+        wait(client, job_id, "awaiting_approval")
+
+
 def test_queue_is_serial_and_interrupted_jobs_are_recoverable(tmp_path):
     from app.store import Store
 

@@ -13,6 +13,8 @@ integrations.
 
 `ReviewRequired` (evidence/config; no retry), `IntegrationUnavailable`
 (render/upload). `config_hash` fingerprints YAML + cached revisions.
+`POST /api/jobs/{id}/restart` wipes stage outputs, stamps the live hash, and
+queues from research so a config change cannot mix with prior artifacts.
 
 `llm_batch(stage, job, requests)` sends several JSON requests to **one**
 child (one model load); `llm(...)` wraps a single request. Before any call,

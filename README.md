@@ -56,7 +56,7 @@ Existing JSON rows from the original SQLite `jobs` table are imported idempotent
 
 Hugging Face supplies **model weights**. Inference runs locally; no hosted inference service or paid API is enabled.
 
-Edit `backend/config/models.yaml` to change repositories, revisions, download patterns, device settings, context size, output limits, priorities, voice, speed, and stage routing without editing agent code. `MODEL_CONFIG` can point to another YAML file.
+Edit `backend/config/models.yaml` to change repositories, revisions, download patterns, device settings, context size, output limits, priorities, voice, speed, and stage routing without editing agent code. `MODEL_CONFIG` can point to another YAML file. The dashboard's **Model library** panel can also override a role's repository, revision, files, device, and tuning fields; those overrides are stored in `backend/data/models.local.yaml` (`MODEL_OVERLAY`, gitignored) on top of the selected profile, and **Reset** removes them. Runtime and stage routing stay in the YAML profile.
 
 Configured roles (defaults in `models.yaml`):
 
@@ -104,7 +104,7 @@ Kokoro's English phonemizer also needs the spaCy English package and `espeak-ng`
 .venv/bin/python -m spacy download en_core_web_sm
 ```
 
-Prepare the configured model files explicitly:
+Prepare the configured model files explicitly, either with the **Download weights** and **Install runtime** buttons in the Model library panel (installs run `uv sync --extra …` in `backend/` and can take several minutes; progress is shown on the card) or from the shell:
 
 ```sh
 .venv/bin/python -m app.models.cli list
@@ -122,7 +122,7 @@ Downloads can total several GB. `all` skips the disabled image role. Set `HF_TOK
 
 The download client resolves a repository revision to a commit, downloads only selected files, then atomically records a cache manifest. Pin `revision` to a commit for reproducible deployments. Inference consumes prepared snapshots with Hugging Face/Transformers offline mode enabled and does not download weights during a job.
 
-The default cache is `backend/data/models`; override with `MODEL_CACHE_DIR`. The model panel reports cache and package presence, not a guarantee of hardware compatibility. Prepare models **before creating local jobs**. Changing model configuration or downloaded commits requires a new draft to avoid silently mixing generations across retries.
+The default cache is `backend/data/models`; override with `MODEL_CACHE_DIR`. The model panel reports cache and package presence, not a guarantee of hardware compatibility. Prepare models **before creating local jobs**. Changing model configuration or downloaded commits (from YAML or the dashboard) requires a new draft or a restart to avoid silently mixing generations across retries; queued local jobs fail with a configuration-changed error.
 
 Start real local inference:
 
@@ -160,7 +160,7 @@ One worker owns the database: a PostgreSQL advisory lock or SQLite file lock pre
 
 Each model call starts an isolated process and waits for its exit before releasing the resource. Failed, timed-out, and cancelled children are terminated and reaped. Linux children receive a parent-death signal if the API process is killed. Hard-kill cleanup on other operating systems is not guaranteed. Unrelated model servers are outside this scheduler's control.
 
-A restart marks interrupted attempts/jobs as failed; queued jobs resume. Manual retry skips completed stages. Local inference failures get bounded retry/backoff; missing models, evidence-policy failures, and unimplemented integrations stop immediately. Mock retries remain manual.
+A restart marks interrupted attempts/jobs as failed; queued jobs resume. Manual retry skips completed stages. If model YAML or prepared weights changed, retry is refused; restart the pipeline from the first stage (or create a new draft). Local inference failures get bounded retry/backoff; missing models, evidence-policy failures, and unimplemented integrations stop immediately. Mock retries remain manual.
 
 ## Current boundaries
 

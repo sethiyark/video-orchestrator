@@ -11,11 +11,11 @@ no Hugging Face download, no live Temporal.
 
 | File | Owns |
 | --- | --- |
-| `test_pipeline.py` | Mock worker, approval, retry, interrupt recovery |
+| `test_pipeline.py` | Mock worker, approval, retry, restart, interrupt recovery |
 | `test_local_provider.py` | Grounding, critics, storyboard schema, unverified claims |
-| `test_local_api.py` | Local artifacts, render boundary |
-| `test_models.py` | Config/device rules, profiles, hub pin + extras, GPU queue, runner kill |
-| `test_runtime.py` | Inference child with fake llama.cpp/whisper: batch, repair, Metal layers, fidelity, WER |
+| `test_local_api.py` | Local artifacts, render boundary, config-hash restart |
+| `test_models.py` | Config/device rules, profiles, hub pin + extras, GPU queue, runner kill, child stderr on abort |
+| `test_runtime.py` | Inference child with fake llama.cpp/whisper: batch, repair, Metal layers, fidelity, WER, parent-pid JSON |
 | `test_database.py` | Legacy import, locks; Postgres if `TEST_DATABASE_URL` |
 | `test_control_plane.py` | Governor, scoring, states, health, object store |
 

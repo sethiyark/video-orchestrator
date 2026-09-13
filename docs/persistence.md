@@ -14,8 +14,8 @@ legacy SQLite `jobs` JSON import, exclusive worker lock.
 ## Public surface
 
 **v1 (pipeline):** `video_jobs`, `video_stages`, `stage_attempts`.
-`Store`: `list`, `get`, `save`, `create`, `transition`, `claim`, `recover`,
-`start_attempt` / `finish_attempt`, `attempts`, `worker_lock`.
+`Store`: `list`, `get`, `save`, `create`, `transition`, `restart`, `claim`,
+`recover`, `start_attempt` / `finish_attempt`, `attempts`, `worker_lock`.
 
 **Control plane (schema now, little pipeline use):** `channels`,
 `channel_configs`, `video_projects`, `workflow_runs`, `workflow_events`,

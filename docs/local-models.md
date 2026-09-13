@@ -46,9 +46,16 @@ system prompt by the child; `/no_think` for Qwen3/SmolLM3, `null` to disable),
 
 ## How it is called
 
-1. Pick a profile or edit YAML (repo_id, revision, files, device, gpu_layers).
-2. `MODEL_CONFIG=… python -m app.models.cli download ROLE` (or `all`).
-3. Create a **new** draft (`config_hash` is stored on the job).
+1. Pick a profile or edit YAML (repo_id, revision, files, device, gpu_layers),
+   or use **Configure** on a Model library card: the change is saved to the
+   overlay file (`MODEL_OVERLAY`, default `backend/data/models.local.yaml`)
+   and merged over the profile. **Reset** removes it.
+2. `MODEL_CONFIG=… python -m app.models.cli download ROLE` (or `all`), or
+   click **Download weights** / **Install runtime** on the card. Installs run
+   `uv sync --extra <extra>` in `backend/` and can take minutes.
+3. Create a **new** draft (`config_hash` is stored on the job), or
+   **restart** an existing draft/failed/awaiting/completed job so stages
+   rebind to the live hash.
 
 Metal needs the Metal wheel of `llama-cpp-python` (README). Whisper and the
 CTC aligner run on CPU or CUDA only.

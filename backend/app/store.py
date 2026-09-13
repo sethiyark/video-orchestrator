@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 from .db import Attempt, StageRecord, VideoJob, make_engine, migrate
 from .providers import STAGES
 
+RESTARTABLE = ("draft", "failed", "awaiting_approval", "completed")
+
 
 def now():
     return datetime.now(UTC).isoformat()
@@ -149,6 +151,25 @@ class Store:
             )
             if result.rowcount != 1:
                 return None
+        return self.get(job_id)
+
+    def restart(self, job_id, config_hash=None):
+        """Wipe stage outputs, rebind config_hash, and queue from the first stage."""
+        with Session(self.engine) as session, session.begin():
+            row = session.get(VideoJob, job_id)
+            if row is None or row.status not in RESTARTABLE:
+                return None
+            row.status = "queued"
+            row.error = None
+            row.approved_at = None
+            row.updated_at = now()
+            row.context = {**(row.context or {}), "config_hash": config_hash}
+            stages = session.scalars(
+                select(StageRecord).where(StageRecord.job_id == job_id)
+            ).all()
+            for stage in stages:
+                stage.status = "pending"
+                stage.output = None
         return self.get(job_id)
 
     def claim(self):
