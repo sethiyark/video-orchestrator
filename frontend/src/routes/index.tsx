@@ -195,7 +195,7 @@ function Dashboard() {
           </div>
           {jobsQuery.isError && (
             <div role="alert" className="error">
-              Cannot reach the backend. Start FastAPI on port 8000.{" "}
+              Cannot reach the backend. Start FastAPI on port 8091.{" "}
               <button onClick={() => void jobsQuery.refetch()}>Retry</button>
             </div>
           )}

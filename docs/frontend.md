@@ -13,7 +13,7 @@ and artifacts, show model cache/GPU. Thin client — no pipeline decisions.
 ## Public surface
 
 Single route `/` (TanStack Router file route). Polls `GET /api/jobs` every 1s,
-`/api/health` every 15s. `VITE_API_URL` or `http://localhost:8000`.
+`/api/health` every 15s. `VITE_API_URL` or `http://localhost:8091`.
 
 Create form: title, brief, optional source URL+excerpt (required in the UI
 when health `provider === "local"`). Actions POST `/jobs/{id}/run` and
@@ -21,7 +21,7 @@ when health `provider === "local"`). Actions POST `/jobs/{id}/run` and
 
 `ModelPanel` consumes `/api/models`.
 
-Vite: `127.0.0.1:3000`. npm scripts: `dev`, `build`, `typecheck`, `format`.
+Vite: `127.0.0.1:3091`. npm scripts: `dev`, `build`, `typecheck`, `format`.
 
 ## How it is called
 

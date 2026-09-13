@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --host 127.0.0.1 --port 3000",
+    "dev": "vite --host 127.0.0.1 --port 3091",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write src vite.config.ts tsconfig.json package.json"

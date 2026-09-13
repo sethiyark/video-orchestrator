@@ -24,7 +24,7 @@ CRUD and run/approve, artifact download. No fill/model arithmetic.
 | POST | `/api/jobs/{id}/run` | `draft`/`failed` → `queued` |
 | POST | `/api/jobs/{id}/approve` | `awaiting_approval` → `queued` + `approved_at` |
 
-CORS: `GET`/`POST`, origins from `CORS_ORIGINS` (default Vite `:3000`).
+CORS: `GET`/`POST`, origins from `CORS_ORIGINS` (default Vite `:3091`).
 
 `JobInput`: title 1–160, brief ≤5000, ≤10 sources with unique ids.
 

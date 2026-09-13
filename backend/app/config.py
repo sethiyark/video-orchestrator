@@ -129,7 +129,7 @@ class Settings:
         ).resolve()
         self.run_worker = os.getenv("RUN_WORKER", "true").lower() == "true"
         self.origins = os.getenv(
-            "CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
+            "CORS_ORIGINS", "http://localhost:3091,http://127.0.0.1:3091"
         ).split(",")
         self.redis_url = os.getenv("REDIS_URL") or None
         self.temporal_target = os.getenv("TEMPORAL_TARGET") or None

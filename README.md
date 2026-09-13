@@ -13,7 +13,7 @@ Terminal 1:
 ```sh
 cd backend
 uv sync
-uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8091
 ```
 
 Terminal 2:
@@ -24,9 +24,11 @@ npm ci
 npm run dev
 ```
 
-Open [the dashboard](http://localhost:3000) or [API docs](http://localhost:8000/docs).
+Open [the dashboard](http://localhost:3091) or [API docs](http://localhost:8091/docs).
 
 The default is **mock mode**. It needs no GPU, model files, tokens, or Docker. Mock completion means a simulation finished; it produces no real video or upload.
+
+The dashboard listens on **3091** and the API on **8091** so they do not collide with typical Vite or FastAPI defaults. Compose Postgres, Redis, MinIO, and Temporal keep their usual host ports (`5432`, `6379`, `9000`, `9001`, `7233`, Temporal UI `8088`).
 
 ## Database
 
@@ -117,7 +119,7 @@ The default cache is `backend/data/models`; override with `MODEL_CACHE_DIR`. The
 Start real local inference:
 
 ```sh
-PIPELINE_MODE=local .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+PIPELINE_MODE=local .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8091
 ```
 
 For optional images, install `uv sync --extra llm --extra audio --extra embeddings --extra images`, set `images_enabled: true`, and prepare `images`. Images use the same exclusive inference queue. The current implementation uses Diffusers directly; ComfyUI is not connected.
@@ -169,7 +171,7 @@ Database support and local model adapters are implemented. The full autonomous o
 docker compose up --build
 ```
 
-Starts PostgreSQL (pgvector), Redis, MinIO, Temporal, Temporal UI (`http://127.0.0.1:8088`), the API (`http://127.0.0.1:8000`), and a Temporal worker. The API image includes base dependencies and runs in mock mode. Persist app files in `video-data`; run the frontend locally. Native GPU inference is intended to run on the host until a CUDA image is added.
+Starts PostgreSQL (pgvector), Redis, MinIO, Temporal, Temporal UI (`http://127.0.0.1:8088`), the API (`http://127.0.0.1:8091`), and a Temporal worker. The API image includes base dependencies and runs in mock mode. Persist app files in `video-data`; run the frontend locally. Native GPU inference is intended to run on the host until a CUDA image is added.
 
 `make setup`, `make test`, and `make worker` are documented in the Makefile. `make run-sample-pipeline` lands in later phases.
 

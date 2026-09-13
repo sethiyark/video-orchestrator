@@ -2,7 +2,7 @@ services:
   api:
     build: ./backend
     ports:
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:8091:8091"
     environment:
       APP_ENV: development
       DATABASE_URL: postgresql+psycopg://video:video_local_dev@postgres:5432/video_orchestrator

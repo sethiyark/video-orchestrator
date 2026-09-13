@@ -31,14 +31,14 @@ Claude Code loads this file via `@AGENTS.md` in `CLAUDE.md` — keep that pointe
 ```bash
 cd backend
 uv sync
-uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8091
 uv run pytest
 uv run ruff check app tests migrations
 uv run python -m app.database
 
 cd frontend
 npm ci
-npm run dev          # :3000
+npm run dev          # :3091
 npm run typecheck
 npm run build
 ```
@@ -48,7 +48,7 @@ Default pipeline is **mock**. Local inference:
 ```bash
 cd backend
 uv sync --extra llm --extra audio --extra embeddings
-PIPELINE_MODE=local .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+PIPELINE_MODE=local .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8091
 ```
 
 Optional foundation stack from the repo root: `docker compose up --build` (Postgres, Redis, MinIO, Temporal, API in mock mode, Temporal worker). Frontend still runs locally.

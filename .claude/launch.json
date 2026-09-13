@@ -6,9 +6,9 @@
       "runtimeExecutable": "zsh",
       "runtimeArgs": [
         "-lc",
-        "source ~/.nvm/nvm.sh && nvm use >/dev/null; cd backend && uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000"
+        "source ~/.nvm/nvm.sh && nvm use >/dev/null; cd backend && uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8091"
       ],
-      "port": 8000
+      "port": 8091
     },
     {
       "name": "video-orchestrator-ui",
@@ -17,7 +17,7 @@
         "-lc",
         "source ~/.nvm/nvm.sh && nvm use >/dev/null; cd frontend && npm run dev"
       ],
-      "port": 3000
+      "port": 3091
     }
   ]
 }

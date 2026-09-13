@@ -5,7 +5,7 @@ setup:
 	cd frontend && npm ci
 
 dev:
-	@echo "Terminal 1: cd backend && uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000"
+	@echo "Terminal 1: cd backend && uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8091"
 	@echo "Terminal 2: cd frontend && npm run dev"
 	@echo "Optional stack: docker compose up postgres redis minio temporal temporal-ui"
 
