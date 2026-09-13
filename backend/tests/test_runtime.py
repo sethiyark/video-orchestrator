@@ -1,5 +1,8 @@
 """The inference child with fake heavy libraries: no weights, no GPU."""
 
+import json
+import os
+import subprocess
 import sys
 import types
 from typing import ClassVar
@@ -7,9 +10,9 @@ from unittest.mock import patch
 
 import pytest
 
-from app.config import Settings
+from app.config import ROOT, Settings
 from app.models.fidelity import fidelity, word_error_rate
-from app.models.runtime import infer
+from app.models.runtime import grammar_schema, infer
 
 
 class FakeLlama:
@@ -74,6 +77,24 @@ def test_batch_loads_once_and_appends_think_toggle(llama, tmp_path):
     assert messages[0]["content"].endswith("/no_think")
     assert kwargs["seed"] == 1 and kwargs["temperature"] == 0.5
     assert [call[1]["seed"] for call in model.calls] == [1, 2, 3]
+
+
+def test_grammar_schema_drops_length_bounds_pydantic_still_enforces(llama, tmp_path):
+    from app import schemas
+
+    full = schemas.Research.model_json_schema()
+    assert full["properties"]["summary"]["maxLength"] == 2000
+    stripped = json.dumps(grammar_schema(full))
+    for key in ("minLength", "maxLength", "maxItems"):
+        assert key not in stripped
+
+    FakeLlama.responses = [CRITIC]
+    infer(spec(), str(tmp_path), {"requests": [request()]})
+    (model,) = FakeLlama.instances
+    sent = json.dumps(model.calls[0][1]["response_format"]["schema"])
+    assert "maxLength" not in sent
+    with pytest.raises(ValueError):
+        schemas.Research.model_validate({"summary": "x" * 2001, "claims": []})
 
 
 def test_cpu_device_uses_no_gpu_layers(llama, tmp_path):
@@ -155,3 +176,24 @@ def test_unsupported_runtime_and_cuda_guard(tmp_path):
             str(tmp_path),
             {"prompt": "x", "output_path": "x.png"},
         )
+
+
+def test_runtime_main_writes_json_when_parent_pid_mismatches(tmp_path):
+    request = tmp_path / "request.json"
+    result = tmp_path / "result.json"
+    request.write_text(
+        json.dumps(
+            {"spec": {"runtime": "nope"}, "snapshot": str(tmp_path), "payload": {}}
+        )
+    )
+    env = {**os.environ, "ORCHESTRATOR_PARENT_PID": "999999"}
+    completed = subprocess.run(
+        [sys.executable, "-m", "app.models.runtime", str(request), str(result)],
+        cwd=ROOT,
+        env=env,
+        check=False,
+    )
+    assert completed.returncode == 1
+    failure = json.loads(result.read_text())
+    assert failure["kind"] == "configuration"
+    assert "parent process is gone" in failure["error"]

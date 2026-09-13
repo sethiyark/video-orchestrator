@@ -12,6 +12,7 @@ from filelock import FileLock, Timeout
 from ..config import ROOT
 from .gpu import GPUManager
 from .hub import ModelHub, ModelNotReady
+from .setup import SetupManager
 
 
 class LocalRunner:
@@ -90,14 +91,20 @@ class LocalRunner:
                         try:
                             await asyncio.wait_for(process.wait(), spec.timeout_seconds)
                             if process.returncode:
-                                # Child writes bounded errors to JSON; don't expose environment logs.
-                                failure = (
-                                    json.loads(result.read_text())
-                                    if result.exists()
-                                    else {
-                                        "error": "Local runtime exited unexpectedly; check optional dependencies and model compatibility"
-                                    }
-                                )
+                                # Prefer the child's JSON. Native aborts never write it,
+                                # so fall back to a bounded, token-scrubbed stderr tail.
+                                if result.exists():
+                                    failure = json.loads(result.read_text())
+                                else:
+                                    detail = ""
+                                    if log.exists():
+                                        detail = SetupManager.scrub(
+                                            log.read_text(errors="replace")[-1500:]
+                                        ).strip()
+                                    message = "Local runtime exited unexpectedly; check optional dependencies and model compatibility"
+                                    if detail:
+                                        message = f"{message}\n{detail}"
+                                    failure = {"error": message}
                                 error_type = (
                                     ModelNotReady
                                     if failure.get("kind") == "configuration"

@@ -188,6 +188,43 @@ def test_runner_kills_child_on_timeout_and_releases_lock(tmp_path):
     asyncio.run(scenario())
 
 
+def test_runner_includes_stderr_when_child_writes_no_result(tmp_path):
+    async def scenario():
+        settings = Settings()
+        settings.cache_dir = tmp_path
+        runner = LocalRunner(settings)
+        process = SimpleNamespace(returncode=1)
+
+        async def wait():
+            return 1
+
+        process.wait, process.kill = wait, lambda: None
+
+        async def spawn(*_args, **kwargs):
+            kwargs["stderr"].write(
+                b"Traceback (most recent call last):\nModuleNotFoundError: No module named 'llama_cpp'\n"
+            )
+            kwargs["stderr"].flush()
+            return process
+
+        with (
+            patch.object(
+                runner.hub,
+                "resolve",
+                return_value={
+                    "snapshot": str(tmp_path),
+                    "revision": "abc",
+                    "fingerprint": "x",
+                },
+            ),
+            patch("asyncio.create_subprocess_exec", side_effect=spawn),
+            pytest.raises(RuntimeError, match="llama_cpp"),
+        ):
+            await runner.run("fast", {}, "job")
+
+    asyncio.run(scenario())
+
+
 def _isolated(tmp_path, monkeypatch):
     monkeypatch.setenv("MODEL_OVERLAY", str(tmp_path / "models.local.yaml"))
     settings = Settings()

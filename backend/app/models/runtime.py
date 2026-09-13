@@ -23,10 +23,29 @@ def _sentences(text):
     return [s for s in re.split(SENTENCE_SPLIT, text) if s.strip()]
 
 
+# JSON-schema keys llama.cpp unrolls into nested repetition groups. A
+# ``maxLength`` of a few thousand exceeds its grammar limits and aborts the
+# child natively, so these bounds stay with pydantic validation only.
+GRAMMAR_UNSAFE_KEYS = ("minLength", "maxLength", "maxItems")
+
+
+def grammar_schema(schema):
+    """Copy of ``schema`` without the length bounds llama.cpp cannot compile."""
+    if isinstance(schema, dict):
+        return {
+            key: grammar_schema(value)
+            for key, value in schema.items()
+            if key not in GRAMMAR_UNSAFE_KEYS
+        }
+    if isinstance(schema, list):
+        return [grammar_schema(value) for value in schema]
+    return schema
+
+
 def _generate_json(model, spec, request, schemas):
     """Grammar-constrained decode, validated in-process; one repair pass on failure."""
     schema_cls = getattr(schemas, request["schema_name"])
-    schema = schema_cls.model_json_schema()
+    schema = grammar_schema(schema_cls.model_json_schema())
     messages = [dict(message) for message in request["messages"]]
     if spec.get("think_toggle") and messages and messages[0]["role"] == "system":
         messages[0]["content"] = f"{messages[0]['content']} {spec['think_toggle']}"
@@ -55,7 +74,9 @@ def _generate_json(model, spec, request, schemas):
                     "Model output reached max_tokens; increase the limit or shorten the input"
                 )
             return {
-                "result": schema_cls.model_validate(json.loads(content)).model_dump(),
+                "result": schema_cls.model_validate(
+                    json.loads(content, strict=False)
+                ).model_dump(),
                 "repaired": attempt > 0,
             }
         except (ValueError, json.JSONDecodeError) as exc:
@@ -328,29 +349,38 @@ def infer(spec, snapshot, payload, extras=None):
     raise ValueError(f"Unsupported runtime: {runtime}")
 
 
-if __name__ == "__main__":
-    # Linux releases child GPU memory even if the parent is killed abruptly.
-    if sys.platform == "linux":
-        import ctypes
+def _fail(result_path, message, kind="inference"):
+    result_path.write_text(json.dumps({"error": message[:1200], "kind": kind}))
+    sys.exit(1)
 
-        if ctypes.CDLL(None).prctl(1, signal.SIGKILL) != 0:
-            raise RuntimeError("Could not set the local runtime parent-death signal")
-    expected_parent = os.getenv("ORCHESTRATOR_PARENT_PID")
-    if expected_parent and os.getppid() != int(expected_parent):
-        sys.exit(1)
-    request = json.loads(Path(sys.argv[1]).read_text())
+
+if __name__ == "__main__":
     result_path = Path(sys.argv[2])
     try:
-        result_path.write_text(json.dumps(infer(**request), allow_nan=False))
-    except Exception as exc:  # noqa: BLE001 - serialize failures at the process boundary
-        result_path.write_text(
-            json.dumps(
-                {
-                    "error": f"{type(exc).__name__}: {str(exc)[:1200]}",
-                    "kind": "configuration"
-                    if isinstance(exc, (ImportError, FileNotFoundError))
-                    else "inference",
-                }
+        # Linux releases child GPU memory even if the parent is killed abruptly.
+        if sys.platform == "linux":
+            import ctypes
+
+            if ctypes.CDLL(None).prctl(1, signal.SIGKILL) != 0:
+                raise RuntimeError(
+                    "Could not set the local runtime parent-death signal"
+                )
+        expected_parent = os.getenv("ORCHESTRATOR_PARENT_PID")
+        if expected_parent and os.getppid() != int(expected_parent):
+            _fail(
+                result_path,
+                "Local runtime parent process is gone; refusing to load models",
+                "configuration",
             )
+        request = json.loads(Path(sys.argv[1]).read_text())
+        result_path.write_text(json.dumps(infer(**request), allow_nan=False))
+    except SystemExit:
+        raise
+    except Exception as exc:  # noqa: BLE001 - serialize failures at the process boundary
+        _fail(
+            result_path,
+            f"{type(exc).__name__}: {str(exc)[:1200]}",
+            "configuration"
+            if isinstance(exc, (ImportError, FileNotFoundError))
+            else "inference",
         )
-        sys.exit(1)
