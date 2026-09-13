@@ -20,16 +20,22 @@ class PipelineFixtureRunner:
                 audio.setsampwidth(2)
                 audio.setframerate(24000)
                 audio.writeframes(b"\x00\x00" * 24000)
-            return {"duration_seconds": 1, "provenance": provenance}
+            return {
+                "duration_seconds": 1,
+                "text": payload["text"],
+                "provenance": provenance,
+            }
         if role == "alignment":
             assert Path(payload["audio_path"]).exists()
+            assert payload["text"]
             return {
                 "segments": [{"text": "DNS maps names", "start": 0, "end": 1}],
+                "method": "asr_transcript",
+                "fidelity": 0.97,
                 "provenance": provenance,
             }
         if role == "embeddings":
             return {"embeddings": [[1.0, 0.0]], "provenance": provenance}
-        schema = payload["schema"]["title"]
         claim = {
             "id": "c1",
             "text": "DNS maps names to addresses.",
@@ -85,7 +91,13 @@ class PipelineFixtureRunner:
                 "tags": ["DNS"],
             },
         }
-        return {"result": results[schema], "provenance": provenance}
+        return {
+            "results": [
+                {"result": results[request["schema_name"]]}
+                for request in payload["requests"]
+            ],
+            "provenance": provenance,
+        }
 
 
 def test_local_pipeline_artifacts_and_explicit_render_boundary(tmp_path):
