@@ -1,26 +1,30 @@
 # Model weights are fetched explicitly with: python -m app.models.cli download ROLE
 # Pin revision to a Hub commit for deployment. Downloads record the resolved commit.
-# CPU is the portable default. On the Linux GPU host set device: cuda and gpu_layers: -1
-# for the two GGUF roles after installing a CUDA build of llama-cpp-python.
+# This file is the CPU-portable default used by tests. Hardware profiles:
+#   MODEL_CONFIG=config/models.mac.yaml       Apple Silicon (Metal), images off
+#   MODEL_CONFIG=config/models.cuda-8gb.yaml  16 GB RAM + 8 GB NVIDIA, images on
 models:
   fast:
     runtime: llama_cpp
-    repo_id: bartowski/HuggingFaceTB_SmolLM3-3B-GGUF
+    repo_id: Qwen/Qwen3-4B-GGUF
     revision: main
-    files: [HuggingFaceTB_SmolLM3-3B-Q4_K_M.gguf]
-    filename: HuggingFaceTB_SmolLM3-3B-Q4_K_M.gguf
+    files: [Qwen3-4B-Q4_K_M.gguf]
+    filename: Qwen3-4B-Q4_K_M.gguf
     device: cpu
     gpu_layers: 0
     max_tokens: 2048
     priority: 20
   quality:
     runtime: llama_cpp
+    # Opt-in alternative (supported by llama-cpp-python >= 0.3.35; text-only, skip mmproj*):
+    #   repo_id: unsloth/Qwen3.5-9B-GGUF, files: [Qwen3.5-9B-Q4_K_M.gguf]
     repo_id: Qwen/Qwen3-8B-GGUF
     revision: main
     files: [Qwen3-8B-Q4_K_M.gguf]
     filename: Qwen3-8B-Q4_K_M.gguf
     device: cpu
     gpu_layers: 0
+    context_size: 16384
     max_tokens: 4096
     priority: 10
     timeout_seconds: 1800
@@ -33,19 +37,30 @@ models:
     device: cpu
   alignment:
     runtime: whisper
-    repo_id: Systran/faster-whisper-small
-    files: [config.json, model.bin, tokenizer.json, vocabulary.txt, preprocessor_config.json]
+    # Low-RAM option: Systran/faster-whisper-small (same files).
+    repo_id: deepdml/faster-whisper-large-v3-turbo-ct2
+    files: [config.json, model.bin, tokenizer.json, vocabulary.json, preprocessor_config.json]
     device: cpu
   embeddings:
     runtime: sentence_transformers
-    repo_id: sentence-transformers/all-MiniLM-L6-v2
+    repo_id: Qwen/Qwen3-Embedding-0.6B
     files: ["*.json", "*.txt", "*.safetensors", "1_Pooling/*"]
     device: cpu
   images:
-    runtime: diffusers
-    repo_id: stabilityai/stable-diffusion-xl-base-1.0
-    files: ["*.json", "*.txt", "*.fp16.safetensors"]
+    runtime: diffusers_gguf
+    repo_id: city96/FLUX.1-schnell-gguf
+    files: [flux1-schnell-Q4_K_S.gguf]
+    filename: flux1-schnell-Q4_K_S.gguf
+    extra_repos:
+      - name: text_encoder
+        repo_id: city96/t5-v1_1-xxl-encoder-gguf
+        files: [t5-v1_1-xxl-encoder-Q5_K_M.gguf]
+        filename: t5-v1_1-xxl-encoder-Q5_K_M.gguf
+      - name: base
+        repo_id: black-forest-labs/FLUX.1-schnell
+        files: ["*.json", "tokenizer/*", "tokenizer_2/*", "text_encoder/*.safetensors", "vae/*.safetensors", "scheduler/*"]
     device: cuda
+    steps: 4
     priority: 40
     timeout_seconds: 1200
 routes:
@@ -63,7 +78,10 @@ routes:
 images_enabled: false
 governor:
   max_attempts: 3
+  critique_rounds: 3
+  critic_temperature: 0.3
   min_script_score: 8.5
   min_research_confidence: 0.9
   max_similarity: 0.9
   max_images: 3
+  min_narration_fidelity: 0.85

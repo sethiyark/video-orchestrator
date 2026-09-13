@@ -50,6 +50,7 @@ class LocalRunner:
                             {
                                 "spec": spec.model_dump(),
                                 "snapshot": manifest["snapshot"],
+                                "extras": manifest.get("extras", {}),
                                 "payload": payload,
                             }
                         )

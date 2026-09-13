@@ -12,44 +12,104 @@ from .governor import ChannelGovernor
 ROOT = Path(__file__).resolve().parents[1]
 
 
-class ModelSpec(BaseModel):
+Runtime = Literal[
+    "llama_cpp",
+    "kokoro",
+    "qwen_tts",
+    "whisper",
+    "ctc_aligner",
+    "sentence_transformers",
+    "diffusers",
+    "diffusers_gguf",
+]
+
+# Runtimes that may offload to Apple Metal (llama.cpp) or torch MPS (Kokoro, Qwen3-TTS).
+METAL_RUNTIMES = {"llama_cpp", "kokoro", "qwen_tts"}
+CUDA_ONLY_RUNTIMES = {"diffusers", "diffusers_gguf"}
+
+
+def _check_relative(names):
+    for name in names:
+        if Path(name).is_absolute() or ".." in Path(name).parts:
+            raise ValueError("Model file patterns must be relative paths")
+
+
+class ExtraRepo(BaseModel):
+    """Companion snapshot pinned in the same manifest (e.g. a GGUF text encoder)."""
+
     model_config = ConfigDict(extra="forbid")
-    runtime: Literal[
-        "llama_cpp", "kokoro", "whisper", "sentence_transformers", "diffusers"
-    ]
+    name: str = Field(min_length=1, max_length=40, pattern=r"^[a-z][a-z0-9_]*$")
     repo_id: str
     revision: str = "main"
     files: list[str] = Field(min_length=1)
     filename: str | None = None
-    device: Literal["cpu", "cuda"] = "cpu"
-    context_size: int = Field(default=8192, ge=512, le=32768)
-    max_tokens: int = Field(default=2048, ge=64, le=8192)
-    gpu_layers: int = Field(default=0, ge=-1)
-    priority: int = 10
-    timeout_seconds: float = Field(default=600, gt=0, le=7200)
-    voice: str = "af_heart"
-    speed: float = Field(default=1, ge=0.5, le=2)
 
     @model_validator(mode="after")
     def validate_files(self):
-        for name in self.files + ([self.filename] if self.filename else []):
-            if Path(name).is_absolute() or ".." in Path(name).parts:
-                raise ValueError("Model file patterns must be relative paths")
-        if self.runtime in ("llama_cpp", "kokoro") and not self.filename:
+        _check_relative(self.files + ([self.filename] if self.filename else []))
+        return self
+
+
+class ModelSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    runtime: Runtime
+    repo_id: str
+    revision: str = "main"
+    files: list[str] = Field(min_length=1)
+    filename: str | None = None
+    extra_repos: list[ExtraRepo] = Field(default_factory=list)
+    device: Literal["cpu", "cuda", "metal"] = "cpu"
+    context_size: int = Field(default=8192, ge=512, le=32768)
+    max_tokens: int = Field(default=2048, ge=64, le=8192)
+    gpu_layers: int = Field(default=0, ge=-1)
+    # Appended to the system prompt for GGUF chat models (Qwen3/SmolLM3 soft switch).
+    think_toggle: str | None = "/no_think"
+    priority: int = 10
+    timeout_seconds: float = Field(default=600, gt=0, le=7200)
+    voice: str = "af_heart"
+    speaker: str = "Ryan"
+    speed: float = Field(default=1, ge=0.5, le=2)
+    steps: int = Field(default=4, ge=1, le=50)
+
+    @model_validator(mode="after")
+    def validate_files(self):
+        _check_relative(self.files + ([self.filename] if self.filename else []))
+        if len({extra.name for extra in self.extra_repos}) != len(self.extra_repos):
+            raise ValueError("extra_repos names must be unique")
+        if (
+            self.runtime in ("llama_cpp", "kokoro", "diffusers_gguf")
+            and not self.filename
+        ):
             raise ValueError(
-                "GGUF and Kokoro models require an explicit weight filename"
+                "GGUF, Kokoro, and GGUF diffusion models require an explicit weight filename"
             )
+        if self.runtime == "diffusers_gguf":
+            names = {extra.name for extra in self.extra_repos}
+            if not {"base", "text_encoder"}.issubset(names):
+                raise ValueError(
+                    "diffusers_gguf requires extra_repos named base and text_encoder"
+                )
         if self.runtime == "sentence_transformers" and self.device != "cpu":
             raise ValueError("The embedding runtime uses CPU to preserve GPU capacity")
+        if self.device == "metal" and self.runtime not in METAL_RUNTIMES:
+            raise ValueError(f"{self.runtime} does not support the metal device")
+        if self.runtime in CUDA_ONLY_RUNTIMES and self.device != "cuda":
+            raise ValueError(f"{self.runtime} requires device: cuda")
         return self
 
 
 class Governor(BaseModel):
+    # Worker retries per stage for transient model failures.
     max_attempts: int = Field(default=3, ge=1, le=5)
+    # Critic → rewrite rounds before ReviewRequired.
+    critique_rounds: int = Field(default=3, ge=1, le=5)
+    critic_temperature: float = Field(default=0.3, ge=0, le=1.5)
     min_script_score: float = Field(default=8.5, ge=0, le=10)
     min_research_confidence: float = Field(default=0.9, ge=0, le=1)
     max_similarity: float = Field(default=0.9, ge=0, le=1)
     max_images: int = Field(default=3, ge=0, le=20)
+    # Alignment fails closed when the narration audio drifts from the script.
+    min_narration_fidelity: float = Field(default=0.85, ge=0, le=1)
 
 
 class ModelConfig(BaseModel):
@@ -62,23 +122,25 @@ class ModelConfig(BaseModel):
     @model_validator(mode="after")
     def validate_routes(self):
         required = {
-            "research": "llama_cpp",
-            "verification": "llama_cpp",
-            "outline": "llama_cpp",
-            "script": "llama_cpp",
-            "critique": "llama_cpp",
-            "storyboard": "llama_cpp",
-            "metadata": "llama_cpp",
-            "narration": "kokoro",
-            "alignment": "whisper",
-            "similarity": "sentence_transformers",
+            "research": {"llama_cpp"},
+            "verification": {"llama_cpp"},
+            "outline": {"llama_cpp"},
+            "script": {"llama_cpp"},
+            "critique": {"llama_cpp"},
+            "storyboard": {"llama_cpp"},
+            "metadata": {"llama_cpp"},
+            "narration": {"kokoro", "qwen_tts"},
+            "alignment": {"whisper", "ctc_aligner"},
+            "similarity": {"sentence_transformers"},
         }
         if self.images_enabled:
-            required["assets"] = "diffusers"
-        for stage, runtime in required.items():
+            required["assets"] = {"diffusers", "diffusers_gguf"}
+        for stage, runtimes in required.items():
             model = self.models.get(self.routes.get(stage, ""))
-            if model is None or model.runtime != runtime:
-                raise ValueError(f"{stage} requires a configured {runtime} model route")
+            if model is None or model.runtime not in runtimes:
+                raise ValueError(
+                    f"{stage} requires a configured {' or '.join(sorted(runtimes))} model route"
+                )
         return self
 
 
