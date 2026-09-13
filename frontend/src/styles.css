@@ -125,6 +125,10 @@ summary:focus-visible {
   color: #315841;
   font-weight: 700;
 }
+.nav {
+  text-decoration: none;
+  cursor: pointer;
+}
 .count {
   margin-left: auto;
   background: #e7ece5;
@@ -325,6 +329,7 @@ h2 {
   gap: 18px;
 }
 .job-card {
+  display: block;
   padding: 0;
   background: #fff;
   border: 1px solid #e0e6d9;
@@ -332,8 +337,10 @@ h2 {
   overflow: hidden;
   text-align: left;
   color: inherit;
+  text-decoration: none;
+  cursor: pointer;
 }
-.job-card.selected {
+.job-card:hover {
   border-color: #678c61;
   box-shadow: 0 0 0 2px #dbe6d4;
 }
@@ -419,12 +426,44 @@ h2 {
   color: #8a9580;
   font-size: 11px;
 }
+.show-completed {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: #6c7770;
+  margin-bottom: 16px;
+  cursor: pointer;
+}
+.show-completed input {
+  cursor: pointer;
+}
 .detail {
   margin-top: 30px;
   background: #fff;
   border: 1px solid #e1e7d9;
   border-radius: 10px;
   padding: 25px;
+}
+.detail-page {
+  margin-top: 0;
+}
+.app-focused .content {
+  max-width: 760px;
+  margin: 0 auto;
+  padding-top: 10px;
+}
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #6c7770;
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 600;
+}
+.back-link:hover {
+  color: #315841;
 }
 .detail-heading {
   display: flex;
@@ -559,8 +598,22 @@ pre {
   color: #344632;
   background: #fcfdf9;
 }
+.modal select {
+  width: 100%;
+  border: 1px solid #dce3d5;
+  border-radius: 6px;
+  padding: 11px;
+  font-size: 13px;
+  color: #344632;
+  background: #fcfdf9;
+}
+.modal textarea.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
 .modal input:focus,
-.modal textarea:focus {
+.modal textarea:focus,
+.modal select:focus {
   outline: 2px solid #89a37a;
 }
 .modal .actions {
@@ -726,6 +779,34 @@ pre {
 .revision {
   display: block;
   margin-top: 8px;
+}
+.model-grid .override {
+  color: #a1843c;
+}
+.model-grid .setup-error {
+  display: block;
+  margin-top: 8px;
+  color: #a05046;
+  overflow-wrap: anywhere;
+}
+.model-grid .setup-log {
+  display: block;
+  margin-top: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow-wrap: anywhere;
+}
+.model-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
+}
+.model-actions button {
+  font-size: 11px;
+  padding: 6px 10px;
+}
+.model-panel .error {
+  margin-top: 12px;
 }
 .artifact-link {
   display: inline-block;

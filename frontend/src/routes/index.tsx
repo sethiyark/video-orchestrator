@@ -1,21 +1,19 @@
 import { useState } from "react";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowUpRight,
-  Check,
   Clapperboard,
-  Cpu,
   Film,
   Layers3,
   Play,
   Plus,
   ShieldCheck,
 } from "lucide-react";
-import { api, type Job, artifactUrl } from "../lib/api";
-import { ModelPanel } from "../components/ModelPanel";
+import { api, type Job } from "../lib/api";
+import { label } from "../lib/format";
+import { Sidebar } from "../components/Sidebar";
 export const Route = createFileRoute("/")({ component: Dashboard });
-const label = (value: string) => value.replaceAll("_", " ");
 function Dashboard() {
   const client = useQueryClient();
   const jobsQuery = useQuery({
@@ -30,14 +28,13 @@ function Dashboard() {
   });
   const isLocal = health.data?.provider === "local";
   const jobs = jobsQuery.data ?? [];
-  const [selected, setSelected] = useState<string | null>(null);
-  const [filter, setFilter] = useState("all");
+  const [filter, setFilter] = useState<"all" | "review" | "completed">("all");
+  const [showCompleted, setShowCompleted] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [title, setTitle] = useState("");
   const [brief, setBrief] = useState("");
   const [sourceUrl, setSourceUrl] = useState("");
   const [sourceExcerpt, setSourceExcerpt] = useState("");
-  const current = jobs.find((job) => job.id === selected);
   const refresh = () => client.invalidateQueries({ queryKey: ["jobs"] });
   const create = useMutation({
     mutationFn: () =>
@@ -55,8 +52,7 @@ function Dashboard() {
             ]
           : [],
       }),
-    onSuccess: (job) => {
-      setSelected(job.id);
+    onSuccess: () => {
       setShowForm(false);
       setTitle("");
       setBrief("");
@@ -65,72 +61,23 @@ function Dashboard() {
       void refresh();
     },
   });
-  const action = useMutation({
-    mutationFn: ({ id, action }: { id: string; action: string }) =>
-      api<Job>(`/jobs/${id}/${action}`, {}),
-    onSuccess: refresh,
-  });
   const waiting = jobs.filter((j) => j.status === "awaiting_approval").length;
   const active = jobs.filter((j) =>
     ["queued", "running"].includes(j.status),
   ).length;
-  const visible = jobs.filter(
-    (j) =>
-      filter === "all" ||
-      (filter === "review"
-        ? j.status === "awaiting_approval"
-        : j.status === "completed"),
-  );
+  const visible = jobs.filter((j) => {
+    if (filter === "review") return j.status === "awaiting_approval";
+    if (filter === "completed") return j.status === "completed";
+    return showCompleted || j.status !== "completed";
+  });
   return (
     <div className="app">
-      <aside className="sidebar">
-        <a className="brand" href="/">
-          <span className="brand-icon">
-            <Clapperboard size={22} />
-          </span>
-          framecraft<span className="brand-dot">.</span>
-        </a>
-        <div className="workspace">
-          <span className="avatar">S</span>
-          <div>
-            My studio<small>Single-channel workspace</small>
-          </div>
-        </div>
-        <div className="nav-label">WORKSPACE</div>
-        <button
-          className={filter === "all" ? "nav active" : "nav"}
-          onClick={() => setFilter("all")}
-        >
-          <Layers3 size={18} /> Production
-        </button>
-        <button
-          className={filter === "review" ? "nav active" : "nav"}
-          onClick={() => setFilter("review")}
-        >
-          <ShieldCheck size={18} /> Review queue{" "}
-          <span className="count">{waiting}</span>
-        </button>
-        <button
-          className={filter === "completed" ? "nav active" : "nav"}
-          onClick={() => setFilter("completed")}
-        >
-          <Film size={18} /> Completed
-        </button>
-        <div className="local-card">
-          <Cpu size={22} />
-          <strong>Local by design</strong>
-          <p>
-            One workload at a time.
-            <br />
-            Built for your 8 GB GPU.
-          </p>
-          <span className="mock-dot" />{" "}
-          {health.data
-            ? `${health.data.provider} providers · ${health.data.database}`
-            : "Checking backend…"}
-        </div>
-        <footer>FRAMECRAFT / v0.1</footer>
-      </aside>
+      <Sidebar
+        active={filter}
+        waitingCount={waiting}
+        health={health.data}
+        onTab={setFilter}
+      />
       <main>
         <header>
           <span>
@@ -152,7 +99,6 @@ function Dashboard() {
               <Plus size={17} /> New video
             </button>
           </div>
-          <ModelPanel />
           <section className="stats">
             <article>
               <span>
@@ -193,6 +139,16 @@ function Dashboard() {
                 : "Mock workflow · No real uploads"}
             </span>
           </div>
+          {filter === "all" && (
+            <label className="show-completed">
+              <input
+                type="checkbox"
+                checked={showCompleted}
+                onChange={(e) => setShowCompleted(e.target.checked)}
+              />
+              Show completed
+            </label>
+          )}
           {jobsQuery.isError && (
             <div role="alert" className="error">
               Cannot reach the backend. Start FastAPI on port 8091.{" "}
@@ -228,13 +184,11 @@ function Dashboard() {
             )}
           <div className="jobs">
             {visible.map((job) => (
-              <button
+              <Link
                 key={job.id}
-                className={`job-card ${selected === job.id ? "selected" : ""}`}
-                onClick={() => {
-                  setSelected(job.id);
-                  action.reset();
-                }}
+                to="/production/$jobId"
+                params={{ jobId: job.id }}
+                className="job-card"
               >
                 <div className="job-art">
                   <Play size={25} />
@@ -258,7 +212,7 @@ function Dashboard() {
                     / {job.stages.length} stages <ArrowUpRight size={14} />
                   </small>
                 </div>
-              </button>
+              </Link>
             ))}
           </div>
           <div className="note">
@@ -268,114 +222,6 @@ function Dashboard() {
               the upload stage.
             </span>
           </div>
-          {current && (
-            <section className="detail">
-              <div className="detail-heading">
-                <div className="min-width">
-                  <div className="eyebrow">PRODUCTION DETAILS</div>
-                  <h2>{current.title}</h2>
-                </div>
-                <div className="actions">
-                  {["draft", "failed"].includes(current.status) && (
-                    <button
-                      className="primary"
-                      disabled={action.isPending}
-                      onClick={() =>
-                        action.mutate({ id: current.id, action: "run" })
-                      }
-                    >
-                      <Play size={15} />
-                      {current.status === "failed"
-                        ? "Retry pipeline"
-                        : "Run pipeline"}
-                    </button>
-                  )}
-                  {current.status === "awaiting_approval" && (
-                    <button
-                      className="primary"
-                      disabled={action.isPending}
-                      onClick={() =>
-                        action.mutate({ id: current.id, action: "approve" })
-                      }
-                    >
-                      <Check size={16} /> Approve mock upload
-                    </button>
-                  )}
-                  <button
-                    className="secondary"
-                    onClick={() => setSelected(null)}
-                  >
-                    Close
-                  </button>
-                </div>
-              </div>
-              {current.status === "awaiting_approval" && (
-                <div className="review-note">
-                  Review the outputs below before approving. All outputs are
-                  placeholders; no playable video has been generated.
-                </div>
-              )}
-              {(current.error || action.error) && (
-                <p role="alert" className="error">
-                  {action.error?.message || current.error}
-                </p>
-              )}
-              <div className="stages">
-                {current.stages.map((stage, index) => (
-                  <details key={stage.name}>
-                    <summary>
-                      <span className={`step ${stage.status}`}>
-                        {stage.status === "completed" ? (
-                          <Check size={14} />
-                        ) : (
-                          index + 1
-                        )}
-                      </span>
-                      <strong>{label(stage.name)}</strong>
-                      <span className={`badge ${stage.status}`}>
-                        {stage.status}
-                      </span>
-                    </summary>
-                    {stage.output ? (
-                      <div>
-                        <pre>{JSON.stringify(stage.output, null, 2)}</pre>
-                        {typeof stage.output.artifact === "object" &&
-                          stage.output.artifact &&
-                          "id" in stage.output.artifact && (
-                            <a
-                              className="artifact-link"
-                              href={artifactUrl(
-                                current.id,
-                                String(stage.output.artifact.id),
-                              )}
-                            >
-                              Download stage JSON
-                            </a>
-                          )}
-                        {typeof stage.output.audio === "object" &&
-                          stage.output.audio &&
-                          "id" in stage.output.audio && (
-                            <a
-                              className="artifact-link"
-                              href={artifactUrl(
-                                current.id,
-                                String(stage.output.audio.id),
-                              )}
-                            >
-                              Download narration WAV
-                            </a>
-                          )}
-                      </div>
-                    ) : (
-                      <p className="muted">
-                        Output will appear when this stage completes.
-                      </p>
-                    )}
-                  </details>
-                ))}
-              </div>
-            </section>
-          )}
           <div className="bottom-line">
             A little less busywork. A lot more creating.
             <span>POWERED BY LOCAL WORKFLOWS</span>
