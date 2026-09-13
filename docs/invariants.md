@@ -35,6 +35,13 @@ tests.
   closed; alignment always receives the script text.
 - Inputs over the route's context budget fail closed before a model load.
 - Storyboard components are a closed enum; no LLM shell/code execution.
+  `SeriesAsset` references an existing active series image/logo by id only.
+- Series bibles, themes, and glossaries are style data, never evidence. A job
+  snapshots them at creation; a changed bible/theme blocks `/run` until
+  Restart rebinds the snapshot. Library sources are copied into jobs, never
+  referenced ([series.md](series.md)).
+- Series uploads accept only allowlisted media whose bytes match the declared
+  type (no SVG/HTML) and are served as attachments.
 - Writer/research tool allowlists: see [logical-agents.md](logical-agents.md).
 
 ## HTTP and secrets
@@ -51,4 +58,5 @@ same change.
 ## Owning tests
 
 `test_pipeline.py`, `test_local_provider.py`, `test_local_api.py`,
-`test_models.py`, `test_runtime.py`, `test_database.py`, `test_control_plane.py`.
+`test_models.py`, `test_runtime.py`, `test_database.py`, `test_control_plane.py`,
+`test_series.py`.

@@ -2,12 +2,20 @@ import asyncio
 import importlib.util
 import logging
 from contextlib import asynccontextmanager, nullcontext, suppress
+from pathlib import Path
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from fastapi.responses import FileResponse, JSONResponse, Response
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -21,6 +29,9 @@ from .observability import configure_logging, render_metrics
 from .orchestrator.client import check_temporal
 from .providers import MockProvider, Provider
 from .schemas import Source
+from .series import SeriesNotFound, SeriesStore
+from .series.api import idea_brief, series_router
+from .series.library import AssetKind, SeriesLibrary, UnsupportedMedia
 from .storage import build_object_store
 from .store import Store
 
@@ -29,6 +40,11 @@ logger = logging.getLogger(__name__)
 CONFIG_CHANGED = (
     "Model configuration changed since this job was created. "
     "Restart the pipeline to run from scratch with the current models."
+)
+
+SERIES_CHANGED = (
+    "The series bible or theme changed since this job was created. "
+    "Restart the pipeline to run from scratch with the current series guidance."
 )
 
 # Runtime name → importable module used to report "runtime installed".
@@ -62,10 +78,23 @@ async def _probe_database(store):
         return "error"
 
 
-class JobInput(BaseModel):
+class SourcesInput(BaseModel):
+    sources: list[Source] = Field(default_factory=list, max_length=10)
+    library_source_ids: list[str] = Field(default_factory=list, max_length=10)
+
+    @field_validator("sources")
+    @classmethod
+    def unique_sources(cls, sources):
+        if len({source.id for source in sources}) != len(sources):
+            raise ValueError("Source IDs must be unique")
+        return sources
+
+
+class JobInput(SourcesInput):
     title: str = Field(min_length=1, max_length=160)
     brief: str = Field(default="", max_length=5000)
-    sources: list[Source] = Field(default_factory=list, max_length=10)
+    series_id: str | None = None
+    theme_id: str | None = None
 
     @field_validator("title")
     @classmethod
@@ -74,12 +103,33 @@ class JobInput(BaseModel):
             raise ValueError("Title must not be blank")
         return value.strip()
 
-    @field_validator("sources")
-    @classmethod
-    def unique_sources(cls, sources):
-        if len({source.id for source in sources}) != len(sources):
-            raise ValueError("Source IDs must be unique")
-        return sources
+    @model_validator(mode="after")
+    def theme_needs_series(self):
+        if self.theme_id and not self.series_id:
+            raise ValueError("theme_id requires series_id")
+        return self
+
+
+class PromoteInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=200)
+    kind: AssetKind
+
+
+# Job artifact suffix → media type that may be promoted into a series library.
+PROMOTABLE = {".png": "image/png", ".wav": "audio/wav"}
+
+
+def media_output(job, artifact_id):
+    """(stage, model provenance) for a media artifact a stage produced, else None."""
+    for stage in job["stages"]:
+        output = stage["output"] or {}
+        if (output.get("audio") or {}).get("id") == artifact_id:
+            return stage["name"], output.get("provenance", {})
+        for image in output.get("images") or []:
+            if (image.get("artifact") or {}).get("id") == artifact_id:
+                return stage["name"], image.get("provenance", {})
+    return None
 
 
 def _explain(exc: Exception) -> str:
@@ -117,7 +167,9 @@ def create_app(
     settings = settings or Settings()
     configure_logging(settings.log_format)
     store = Store(db_path or settings.database_url)
+    series = SeriesStore(store.engine)
     objects = build_object_store(settings)
+    library = SeriesLibrary(store.engine, objects)
     redis = RedisGateway(settings.redis_url)
     provider = provider or (
         LocalProvider(settings, store) if settings.mode == "local" else MockProvider()
@@ -232,15 +284,80 @@ def create_app(
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.origins,
-        allow_methods=["GET", "POST", "DELETE"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
         allow_headers=["Content-Type"],
     )
+
+    def with_series_state(jobs):
+        """Mark jobs whose series snapshot no longer matches the live bible/theme."""
+        current = {}
+        for job in jobs:
+            if not job.get("series_id"):
+                job["series_stale"] = False
+                continue
+            key = (job["series_id"], job.get("theme_id"))
+            if key not in current:
+                current[key] = series.current_hash(*key)
+            job["series_stale"] = current[key] != job.get("series_hash")
+        return jobs
 
     def get_job(job_id):
         job = store.get(job_id)
         if not job:
             raise HTTPException(404, "Video job not found")
-        return job
+        return with_series_state([job])[0]
+
+    def series_snapshot(series_id, theme_id):
+        if not series_id:
+            return None
+        try:
+            return series.resolve_context(series_id, theme_id)
+        except SeriesNotFound as exc:
+            raise HTTPException(422, exc.args[0]) from exc
+
+    def create_job_record(
+        title, brief, body: SourcesInput, series_context, idea_id=None
+    ):
+        sources = [source.model_dump(mode="json") for source in body.sources]
+        if body.library_source_ids:
+            if not series_context:
+                raise HTTPException(422, "library_source_ids requires a series")
+            try:
+                # Copied, not referenced: later library edits never change evidence.
+                sources += library.job_sources(
+                    series_context["series"]["id"], body.library_source_ids
+                )
+            except SeriesNotFound as exc:
+                raise HTTPException(422, exc.args[0]) from exc
+            if len({source["id"] for source in sources}) != len(sources):
+                raise HTTPException(422, "Source IDs must be unique")
+            if len(sources) > 10:
+                raise HTTPException(422, "A video can use at most 10 sources")
+        if settings.mode == "local" and not sources:
+            raise HTTPException(
+                422, "Local mode requires at least one source URL and excerpt"
+            )
+        return store.create(
+            title,
+            brief,
+            sources,
+            settings.mode,
+            getattr(provider, "config_hash", None),
+            series_context,
+            idea_id,
+        )
+
+    def start_idea_job(idea, body: SourcesInput):
+        context = series_snapshot(idea["series_id"], idea["theme_id"])
+        job = create_job_record(
+            idea["title"], idea_brief(idea), body, context, idea["id"]
+        )
+        try:
+            series.link_job(idea["series_id"], idea["id"], job["id"])
+        except ValueError as exc:
+            store.delete(job["id"])
+            raise HTTPException(409, str(exc)) from exc
+        return with_series_state([job])[0]
 
     @app.get("/api/health")
     async def health():
@@ -414,21 +531,13 @@ def create_app(
 
     @app.get("/api/jobs")
     async def list_jobs():
-        return store.list()
+        return with_series_state(store.list())
 
     @app.post("/api/jobs", status_code=201)
     async def create_job(body: JobInput):
-        if settings.mode == "local" and not body.sources:
-            raise HTTPException(
-                422, "Local mode requires at least one source URL and excerpt"
-            )
-        return store.create(
-            body.title,
-            body.brief,
-            [source.model_dump(mode="json") for source in body.sources],
-            settings.mode,
-            getattr(provider, "config_hash", None),
-        )
+        context = series_snapshot(body.series_id, body.theme_id)
+        job = create_job_record(body.title, body.brief, body, context)
+        return with_series_state([job])[0]
 
     @app.get("/api/jobs/{job_id}")
     async def detail(job_id: str):
@@ -448,6 +557,49 @@ def create_app(
             raise HTTPException(404, "Artifact not found")
         return FileResponse(path, filename=artifact_id)
 
+    @app.post("/api/jobs/{job_id}/artifacts/{artifact_id}/promote", status_code=201)
+    async def promote_artifact(job_id: str, artifact_id: str, body: PromoteInput):
+        job = get_job(job_id)
+        if not job.get("series_id"):
+            raise HTTPException(409, "Only videos in a series can promote artifacts")
+        content_type = PROMOTABLE.get(Path(artifact_id).suffix)
+        if content_type is None:
+            raise HTTPException(
+                415, "Only PNG images and WAV narration can be promoted"
+            )
+        found = media_output(job, artifact_id)
+        try:
+            path = artifacts.resolve(job_id, artifact_id)
+        except (ValueError, FileNotFoundError):
+            found = None
+        if found is None:
+            raise HTTPException(404, "Artifact is not a media output of this video")
+        if path.stat().st_size > settings.series_asset_max_bytes:
+            raise HTTPException(
+                413, f"Assets are limited to {settings.series_asset_max_bytes} bytes"
+            )
+        stage, model = found
+        try:
+            result = await library.add(
+                job["series_id"],
+                path.read_bytes(),
+                content_type,
+                body.name.strip(),
+                body.kind,
+                {
+                    "origin": "promoted",
+                    "job_id": job_id,
+                    "artifact_id": artifact_id,
+                    "stage": stage,
+                    "model": model,
+                },
+            )
+        except SeriesNotFound as exc:
+            raise HTTPException(409, exc.args[0]) from exc
+        except UnsupportedMedia as exc:
+            raise HTTPException(415, str(exc)) from exc
+        return JSONResponse(result, status_code=200 if result["duplicate"] else 201)
+
     def require_same_mode(job):
         if job.get("mode", "mock") != settings.mode:
             raise HTTPException(
@@ -465,6 +617,8 @@ def create_app(
         require_same_mode(job)
         if config_stale(job):
             raise HTTPException(409, CONFIG_CHANGED)
+        if job["series_stale"]:
+            raise HTTPException(409, SERIES_CHANGED)
         result = store.transition(job_id, ["draft", "failed"], "queued")
         if result is None:
             raise HTTPException(409, "Only draft or failed jobs can be started")
@@ -474,13 +628,19 @@ def create_app(
     async def restart(job_id: str):
         job = get_job(job_id)
         require_same_mode(job)
-        result = store.restart(job_id, getattr(provider, "config_hash", None))
+        context = None
+        if job.get("series_id"):
+            try:
+                context = series.resolve_context(job["series_id"], job.get("theme_id"))
+            except SeriesNotFound as exc:
+                raise HTTPException(409, exc.args[0]) from exc
+        result = store.restart(job_id, getattr(provider, "config_hash", None), context)
         if result is None:
             raise HTTPException(
                 409,
                 "Only draft, failed, awaiting-approval, or completed jobs can be restarted",
             )
-        return result
+        return with_series_state([result])[0]
 
     @app.post("/api/jobs/{job_id}/approve")
     async def approve(job_id: str):
@@ -494,7 +654,19 @@ def create_app(
     async def delete_job(job_id: str):
         get_job(job_id)
         store.delete(job_id)
+        series.release_job(job_id)
         return Response(status_code=204)
+
+    app.include_router(
+        series_router(
+            series,
+            library,
+            lambda: with_series_state(store.list()),
+            start_idea_job,
+            SourcesInput,
+            settings.series_asset_max_bytes,
+        )
+    )
 
     return app
 

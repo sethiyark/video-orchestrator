@@ -18,6 +18,7 @@ no Hugging Face download, no live Temporal.
 | `test_runtime.py` | Inference child with fake llama.cpp/whisper: batch, repair, Metal layers, fidelity, WER, parent-pid JSON |
 | `test_database.py` | Legacy import, locks; Postgres if `TEST_DATABASE_URL` |
 | `test_control_plane.py` | Governor, scoring, states, health, object store |
+| `test_series.py` | Series CRUD, bible versions, snapshot staleness, ideas, prompt guidance, uploads, library sources, promotion, `SeriesAsset` pinning |
 
 Fakes: controlled model JSON (`FakeRunner` answers `requests` batches), fake
 runtime processes, and fake heavy libraries injected into `sys.modules`.

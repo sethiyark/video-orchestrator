@@ -146,13 +146,19 @@ Local jobs require source URLs and excerpts. The UI accepts one source; the API 
 
 Accuracy, retention, clarity, originality, and style critics use separate prompts and seeds but share one model load per round. The minimum critic score and unresolved required changes determine acceptance; rewrites see only the required changes. Revision loops are bounded by `critique_rounds`. Inputs that cannot fit the model context stop with a review message before any model runs. Corpus similarity uses normalized embeddings from the same model configuration and revision; it currently compares against all prior jobs with completed similarity outputs, not only published videos.
 
-Storyboards accept a closed JSON schema: `DefinitionCard`, `AnimatedFlowDiagram`, `BulletReveal`, and optional `ImagePan`. They cannot contain arbitrary renderer code. Kokoro (or Qwen3-TTS) produces a concatenated WAV with chunk boundaries; alignment produces segment and word timestamps plus a fidelity score against the script, and stops the job for review when the audio does not match the narration. Final scene retiming remains a renderer integration task.
+Storyboards accept a closed JSON schema: `DefinitionCard`, `AnimatedFlowDiagram`, `BulletReveal`, optional `ImagePan`, and `SeriesAsset` (an existing series image or logo, by id). They cannot contain arbitrary renderer code. Kokoro (or Qwen3-TTS) produces a concatenated WAV with chunk boundaries; alignment produces segment and word timestamps plus a fidelity score against the script, and stops the job for review when the audio does not match the narration. Final scene retiming remains a renderer integration task.
 
 Stage JSON and media are saved under `ARTIFACT_DIR` (default `backend/data/artifacts`) with content hashes and model provenance. Inspect stage JSON and download narration in the dashboard. API endpoints include:
 
 - `GET /api/models`: configured roles, routes, cache state, and inference queue.
 - `GET /api/jobs/{id}/attempts`: attempt history and review artifacts on critic failure.
 - `GET /api/jobs/{id}/artifacts/{artifact_id}`: saved JSON, WAV, or PNG files.
+
+## Series
+
+A series is an optional shared project for related videos (dashboard **Series** tab). It holds a versioned bible (voice and tone, visual style, glossary), themes, an idea backlog, a media library, and reusable source excerpts. Starting an idea creates a draft video. Each video snapshots the bible and theme when it is created. If either changes later, the video shows "bible changed" and must be restarted before it runs again. Library excerpts are copied into the video, so editing the library never changes a video's evidence. Series guidance shapes the writing and visuals only; it never counts as evidence for a claim.
+
+Upload PNG, JPEG, WebP, WAV, MP3, or MP4 files up to `SERIES_ASSET_MAX_BYTES` (default 50 MB). SVG is rejected. Files are stored through the object store (`ARTIFACT_DIR/series/…` locally, or MinIO with `STORAGE_BACKEND=s3`). Narration and generated images from a series video can be promoted into its library. Details: [`docs/series.md`](docs/series.md).
 
 ## Scheduling and recovery
 

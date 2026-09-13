@@ -18,6 +18,16 @@ def now():
     return datetime.now(UTC).isoformat()
 
 
+def series_fields(context):
+    """Job context keys for a series snapshot (all None for standalone jobs)."""
+    return {
+        "series_id": context["series"]["id"] if context else None,
+        "theme_id": (context["theme"] or {}).get("id") if context else None,
+        "series_context": context,
+        "series_hash": context["hash"] if context else None,
+    }
+
+
 class Store:
     def __init__(self, url: str):
         self.engine = make_engine(url)
@@ -120,9 +130,20 @@ class Store:
                 session.merge(StageRecord(job_id=job["id"], position=position, **stage))
         return job
 
-    def create(self, title, brief, sources=None, mode="mock", config_hash=None):
+    def create(
+        self,
+        title,
+        brief,
+        sources=None,
+        mode="mock",
+        config_hash=None,
+        series_context=None,
+        idea_id=None,
+    ):
         return self.save(
             {
+                **series_fields(series_context),
+                "idea_id": idea_id,
                 "id": str(uuid4()),
                 "title": title,
                 "brief": brief,
@@ -154,8 +175,8 @@ class Store:
                 return None
         return self.get(job_id)
 
-    def restart(self, job_id, config_hash=None):
-        """Wipe stage outputs, rebind config_hash, and queue from the first stage."""
+    def restart(self, job_id, config_hash=None, series_context=None):
+        """Wipe stage outputs, rebind config_hash (and series snapshot), and queue."""
         with Session(self.engine) as session, session.begin():
             row = session.get(VideoJob, job_id)
             if row is None or row.status not in RESTARTABLE:
@@ -164,7 +185,11 @@ class Store:
             row.error = None
             row.approved_at = None
             row.updated_at = now()
-            row.context = {**(row.context or {}), "config_hash": config_hash}
+            row.context = {
+                **(row.context or {}),
+                "config_hash": config_hash,
+                **(series_fields(series_context) if series_context else {}),
+            }
             stages = session.scalars(
                 select(StageRecord).where(StageRecord.job_id == job_id)
             ).all()

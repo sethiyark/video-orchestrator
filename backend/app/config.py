@@ -258,6 +258,11 @@ class Settings:
         ).split(",")
         self.redis_url = os.getenv("REDIS_URL") or None
         self.temporal_target = os.getenv("TEMPORAL_TARGET") or None
+        self.series_asset_max_bytes = int(
+            os.getenv("SERIES_ASSET_MAX_BYTES", str(50 * 1024 * 1024))
+        )
+        if self.series_asset_max_bytes <= 0:
+            raise ValueError("SERIES_ASSET_MAX_BYTES must be positive")
         self.storage_backend = os.getenv("STORAGE_BACKEND", "local")
         if self.storage_backend not in ("local", "s3"):
             raise ValueError("STORAGE_BACKEND must be local or s3")

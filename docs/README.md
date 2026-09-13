@@ -24,6 +24,7 @@ else in `docs/` should describe unbuilt work as current.
 | [architecture.md](architecture.md) | [`backend/app/main.py`](../backend/app/main.py), [`compose.yaml`](../compose.yaml) | Layout, current vs target control plane |
 | [api.md](api.md) | [`main.py`](../backend/app/main.py), [`schemas.py`](../backend/app/schemas.py) | HTTP routes, CORS, health |
 | [config.md](config.md) | [`config.py`](../backend/app/config.py), [`backend/config/`](../backend/config) | Env + layered YAML |
+| [series.md](series.md) | [`app/series/`](../backend/app/series) | Shared bibles, themes, ideas, media + source libraries |
 | [governor.md](governor.md) | [`app/governor/`](../backend/app/governor) | Deterministic channel policy |
 | [persistence.md](persistence.md) | [`store.py`](../backend/app/store.py), [`app/db/`](../backend/app/db), Alembic | Jobs, stages, control-plane tables |
 | [pipeline.md](pipeline.md) | [`local_provider.py`](../backend/app/local_provider.py) | Local stages, evidence, critics |

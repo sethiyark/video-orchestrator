@@ -33,6 +33,7 @@ def migrate(engine):
     # Register every mapped table on Base.metadata before upgrade.
     from . import jobs as _jobs  # noqa: F401
     from . import platform as _platform  # noqa: F401
+    from . import series as _series  # noqa: F401
 
     config = Config()
     config.set_main_option(

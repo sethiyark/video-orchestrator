@@ -3,6 +3,7 @@
 Sources: [`backend/app/store.py`](../backend/app/store.py),
 [`backend/app/db/jobs.py`](../backend/app/db/jobs.py),
 [`backend/app/db/platform.py`](../backend/app/db/platform.py),
+[`backend/app/db/series.py`](../backend/app/db/series.py),
 [`backend/app/db/engine.py`](../backend/app/db/engine.py),
 [`backend/migrations/`](../backend/migrations).
 
@@ -21,10 +22,20 @@ legacy SQLite `jobs` JSON import, exclusive worker lock.
 `channel_configs`, `video_projects`, `workflow_runs`, `workflow_events`,
 `assets`, plus cost/alert/gpu job tables in `platform.py` / migration `0002`.
 
+**Series:** `series`, `series_bibles` (append-only, unique
+`(series_id, version)`), `series_themes`, `series_ideas` (`job_id` is a plain
+column, not a FK), `series_sources` (unique `(series_id, source_key)`), and
+`assets.series_id` / `assets.name` for the series media library. Accessed via
+`SeriesStore` / `SeriesLibrary` ([series.md](series.md)). A job's series link
+and snapshot live in `video_jobs.context` (`series_id`, `theme_id`, `idea_id`,
+`series_context`, `series_hash`); `Store.create` and `Store.restart` accept a
+`series_context`.
+
 Default SQLite: `backend/data/jobs.sqlite3`. `DATABASE_URL` takes precedence.
 PostgreSQL URLs starting `postgresql://` are rewritten to `postgresql+psycopg://`.
 
-Revisions: `0001_relational_state`, `0002_control_plane`.
+Revisions: `0001_relational_state`, `0002_control_plane`, `0003_series`,
+`0004_series_library` (SQLite-safe `batch_alter_table` on `assets`).
 
 `python -m app.database` migrates and prints dialect + job count.
 
@@ -47,7 +58,8 @@ Revisions: `0001_relational_state`, `0002_control_plane`.
 ## Related tests
 
 `test_database.py` (legacy import, concurrent transitions, worker lock,
-optional Postgres via `TEST_DATABASE_URL`).
+optional Postgres via `TEST_DATABASE_URL`); `test_series.py`
+(`test_migration_creates_series_tables`, series tables through the API).
 
 ## Known limitations
 

@@ -18,8 +18,10 @@ storage root is rejected.
 
 ## How it is called
 
-`create_app` for health `storage` probe. Pipeline stages still primarily use
-`Artifacts` for job media.
+`create_app` for health `storage` probe and for the series media library
+(`SeriesLibrary`, keys `series/{series_id}/{sha256}{suffix}`; see
+[series.md](series.md)). Pipeline stages still primarily use `Artifacts` for
+job media; promotion copies an artifact's bytes into the object store.
 
 ## Invariants
 
@@ -28,7 +30,8 @@ temporal which may be `disabled`).
 
 ## Related tests
 
-`test_local_object_store_hashes_and_rejects_escape`.
+`test_local_object_store_hashes_and_rejects_escape`,
+`test_asset_upload_allowlist_dedupe_and_archive`.
 
 ## Known limitations
 

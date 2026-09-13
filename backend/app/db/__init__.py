@@ -13,6 +13,13 @@ from .platform import (
     WorkflowEvent,
     WorkflowRun,
 )
+from .series import (
+    Series,
+    SeriesBibleVersion,
+    SeriesIdea,
+    SeriesSource,
+    SeriesTheme,
+)
 
 __all__ = [
     "Alert",
@@ -24,6 +31,11 @@ __all__ = [
     "CostRecord",
     "GpuJob",
     "ModelRun",
+    "Series",
+    "SeriesBibleVersion",
+    "SeriesIdea",
+    "SeriesSource",
+    "SeriesTheme",
     "StageRecord",
     "VideoJob",
     "VideoProject",

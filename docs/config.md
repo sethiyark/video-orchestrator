@@ -17,12 +17,13 @@ policy from layered YAML. Model roles from `models.yaml`.
 `channel_governor`, `models`, `model_overrides`, `model_overlay_path`, `cache_dir`, `artifact_dir`, `run_worker`,
 `origins` (default Vite `http://localhost:3091` and `http://127.0.0.1:3091`),
 `redis_url`, `temporal_target`, `storage_backend` (`local`|`s3`),
-S3 fields (`s3_endpoint` default `http://127.0.0.1:9000`), `log_format`.
+S3 fields (`s3_endpoint` default `http://127.0.0.1:9000`),
+`series_asset_max_bytes` (default 52428800; must be positive), `log_format`.
 
 Env (selected): `DATABASE_URL` (wins over `DATABASE_PATH`), `PIPELINE_MODE`,
 `APP_ENV`, `MODEL_CONFIG`, `MODEL_OVERLAY`, `MODEL_CACHE_DIR`, `ARTIFACT_DIR`, `RUN_WORKER`,
 `CORS_ORIGINS`, `REDIS_URL`, `TEMPORAL_TARGET`, `STORAGE_BACKEND`,
-`S3_*`, `LOG_FORMAT`, `LOG_LEVEL`, `HF_TOKEN` (download/inference child
+`S3_*`, `SERIES_ASSET_MAX_BYTES`, `LOG_FORMAT`, `LOG_LEVEL`, `HF_TOKEN` (download/inference child
 stripping is in the runner).
 
 `ModelConfig` forbids extra keys; stage routes must match required runtimes:

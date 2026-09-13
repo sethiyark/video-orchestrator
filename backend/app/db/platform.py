@@ -68,6 +68,8 @@ class Asset(Base):
     project_id: Mapped[str | None] = mapped_column(
         ForeignKey("video_projects.id"), index=True
     )
+    series_id: Mapped[str | None] = mapped_column(ForeignKey("series.id"), index=True)
+    name: Mapped[str | None] = mapped_column(String(200))
     kind: Mapped[str] = mapped_column(String(40), index=True)
     object_key: Mapped[str] = mapped_column(String(500), unique=True)
     sha256: Mapped[str] = mapped_column(String(64), index=True)

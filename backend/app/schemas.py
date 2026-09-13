@@ -82,6 +82,12 @@ class ImageProps(StrictModel):
     prompt: str = Field(min_length=10, max_length=500)
 
 
+class SeriesAssetProps(StrictModel):
+    title: str = Field(max_length=160)
+    asset_id: str = Field(min_length=1, max_length=36)
+    caption: str = Field(default="", max_length=300)
+
+
 class SceneBase(StrictModel):
     scene_id: str = Field(pattern=r"^scene_[0-9]{3}$")
     narration_text: str
@@ -108,8 +114,16 @@ class ImageScene(SceneBase):
     props: ImageProps
 
 
+class SeriesAssetScene(SceneBase):
+    """Shows an existing series image/logo by id; the id is validated, never a path."""
+
+    component: Literal["SeriesAsset"]
+    props: SeriesAssetProps
+
+
 Scene = Annotated[
-    CardScene | FlowScene | BulletScene | ImageScene, Field(discriminator="component")
+    CardScene | FlowScene | BulletScene | ImageScene | SeriesAssetScene,
+    Field(discriminator="component"),
 ]
 
 
