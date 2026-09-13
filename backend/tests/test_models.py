@@ -238,3 +238,83 @@ def test_invalid_override_rejected_and_nothing_written(tmp_path, monkeypatch):
     assert settings.models.models["embeddings"].device == "cpu"
     with pytest.raises(KeyError):
         settings.save_override("nope", {"revision": "x"})
+
+
+def _run(coroutine):
+    return asyncio.run(coroutine)
+
+
+def test_setup_manager_scrubs_token_and_rejects_unknown_extra(tmp_path, monkeypatch):
+    import sys
+
+    from app.models.setup import SetupManager
+
+    monkeypatch.setenv("HF_TOKEN", "hf_secretvalue123")
+    calls = []
+
+    def factory(extra):
+        calls.append(extra)
+        return [
+            sys.executable,
+            "-c",
+            "import os; print('token', os.environ.get('HF_TOKEN'), 'hf_abcdefghij')",
+        ]
+
+    manager = SetupManager(ModelHub(tmp_path), root=tmp_path, command_factory=factory)
+    with pytest.raises(ValueError, match="Unknown runtime extra"):
+        manager.start_install("shell")
+
+    async def scenario():
+        snapshot = manager.start_install("llm")
+        assert snapshot["state"] == "running"
+        assert manager.any_running()
+        with pytest.raises(RuntimeError, match="already running"):
+            manager.start_install("llm")
+        await manager._jobs["install:llm"]
+        return manager.status("install:llm")
+
+    status = _run(scenario())
+    assert calls == ["llm"]
+    assert status["state"] == "done"
+    assert status["ended_at"]
+    joined = "\n".join(status["log"])
+    assert "hf_secretvalue123" not in joined
+    assert "hf_abcdefghij" not in joined
+    assert "token None ***" in joined  # HF_TOKEN stripped from the child env
+
+
+def test_setup_manager_download_states(tmp_path):
+    import threading
+
+    from app.models.setup import SetupBusy, SetupManager
+
+    spec = Settings().models.models["fast"]
+    hub = ModelHub(tmp_path)
+    release = threading.Event()
+
+    def blocking_download(spec):
+        release.wait(5)
+        return {"revision": "c" * 40}
+
+    async def scenario():
+        with patch.object(hub, "download", side_effect=blocking_download):
+            manager = SetupManager(hub, root=tmp_path)
+            manager.start_download("fast", spec)
+            with pytest.raises(SetupBusy):
+                manager.start_download("fast", spec)
+            release.set()
+            await manager._jobs["download:fast"]
+            done = manager.status("download:fast")
+        with patch.object(
+            hub, "download", side_effect=ModelNotReady("hf_deadbeef00 missing")
+        ):
+            manager.start_download("fast", spec)
+            await manager._jobs["download:fast"]
+            failed = manager.status("download:fast")
+        return done, failed
+
+    done, failed = _run(scenario())
+    assert done["state"] == "done"
+    assert done["log"][-1].startswith("Downloaded ")
+    assert failed["state"] == "failed"
+    assert failed["error"] == "*** missing"
