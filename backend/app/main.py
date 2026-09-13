@@ -11,7 +11,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from .artifacts import Artifacts
-from .config import Settings
+from .config import CUDA_ONLY_RUNTIMES, Settings
 from .infra import RedisGateway
 from .local_provider import IntegrationUnavailable, LocalProvider, ReviewRequired
 from .models.hub import ModelHub, ModelNotReady
@@ -259,9 +259,12 @@ def create_app(
         modules = {
             "llama_cpp": "llama_cpp",
             "kokoro": "kokoro",
+            "qwen_tts": "qwen_tts",
             "whisper": "faster_whisper",
+            "ctc_aligner": "ctc_forced_aligner",
             "sentence_transformers": "sentence_transformers",
             "diffusers": "diffusers",
+            "diffusers_gguf": "diffusers",
         }
         result = []
         for role, spec in settings.models.models.items():
@@ -285,7 +288,7 @@ def create_app(
                         for stage, selected in settings.models.routes.items()
                         if selected == role
                     ],
-                    "enabled": spec.runtime != "diffusers"
+                    "enabled": spec.runtime not in CUDA_ONLY_RUNTIMES
                     or settings.models.images_enabled,
                 }
             )
