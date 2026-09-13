@@ -74,6 +74,8 @@ make dev-local-mac    # MODEL_CONFIG=config/models.mac.yaml   (Metal, images off
 make dev-local-cuda   # MODEL_CONFIG=config/models.cuda-8gb.yaml (CUDA, images on)
 ```
 
+Each target starts the local API (`127.0.0.1:8091`) and the dashboard (`127.0.0.1:3091`). Ctrl+C stops both.
+
 Only one model is resident at a time, so peak memory is the quality GGUF plus its KV cache (about 7 GB at the CUDA profile's 12k context). Each critique round loads the model once for all five critics.
 
 The API remains lightweight; each inference subprocess imports only its required runtime. From `backend`, install the optional dependency groups you need:

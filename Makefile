@@ -20,13 +20,24 @@ dev-api:
 dev-ui:
 	cd frontend && pnpm dev
 
-# Real local inference with a hardware profile. Prepare weights first:
+# Real local inference with a hardware profile. API :8091 and dashboard :3091.
+# Prepare weights first:
 #   cd backend && MODEL_CONFIG=config/models.mac.yaml .venv/bin/python -m app.models.cli download all
 dev-local-mac:
-	cd backend && MODEL_CONFIG=config/models.mac.yaml PIPELINE_MODE=local .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8091
+	@echo "API        http://127.0.0.1:8091/docs  (local, models.mac.yaml)"
+	@echo "Dashboard  http://127.0.0.1:3091"
+	@trap 'kill 0' INT TERM EXIT; \
+	(cd backend && MODEL_CONFIG=config/models.mac.yaml PIPELINE_MODE=local .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8091) & \
+	(cd frontend && pnpm dev) & \
+	wait
 
 dev-local-cuda:
-	cd backend && MODEL_CONFIG=config/models.cuda-8gb.yaml PIPELINE_MODE=local .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8091
+	@echo "API        http://127.0.0.1:8091/docs  (local, models.cuda-8gb.yaml)"
+	@echo "Dashboard  http://127.0.0.1:3091"
+	@trap 'kill 0' INT TERM EXIT; \
+	(cd backend && MODEL_CONFIG=config/models.cuda-8gb.yaml PIPELINE_MODE=local .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8091) & \
+	(cd frontend && pnpm dev) & \
+	wait
 
 test:
 	cd backend && uv run pytest

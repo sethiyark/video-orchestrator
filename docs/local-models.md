@@ -31,9 +31,11 @@ Profiles (select with `MODEL_CONFIG`):
 
 - `models.yaml` — CPU-portable; tests load it.
 - `models.mac.yaml` — `device: metal`, `gpu_layers: -1` for both GGUF roles,
-  Kokoro on MPS, images off. `make dev-local-mac`.
+  Kokoro on MPS, images off. `make dev-local-mac` starts the local API and
+  dashboard together.
 - `models.cuda-8gb.yaml` — `device: cuda`, `gpu_layers: -1`, Qwen3-TTS,
-  CTC forced aligner, `images_enabled: true`. `make dev-local-cuda`.
+  CTC forced aligner, `images_enabled: true`. `make dev-local-cuda` starts
+  the local API and dashboard together.
 
 `ModelSpec` fields beyond the repo: `device` (`cpu|cuda|metal`),
 `context_size`, `max_tokens`, `gpu_layers`, `think_toggle` (appended to the
