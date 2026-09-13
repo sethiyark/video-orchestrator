@@ -43,6 +43,23 @@ critique rewrite. A script with fewer than
 raises `ReviewRequired` as truncated or off-task, so a broken draft never
 reaches the critics. Skipped when there is no outline.
 
+Storyboard: the script is split into sentences (`SENTENCE_SPLIT`, the
+narration runtime's boundaries) and planned in chunks of
+`STORYBOARD_CHUNK_SENTENCES` (16), one `StoryboardChunk` request per chunk in
+one model load. The model receives `{"sentences": [{"n", "text"}]}` and
+returns scenes as `first_sentence`/`last_sentence` + `component` + `props`;
+it never re-emits narration, so output size does not grow with the script.
+The chunk schema requires 1–4 sentences per scene with no gaps or overlaps;
+the provider requires each chunk's scenes to span exactly its sentence
+numbers, then copies the exact `narration_text`, numbers `scene_NNN` ids,
+sets `duration_seconds = max(words / 2.5, 2)`, and validates the assembled
+`Storyboard` (a violation such as >120 scenes or a >60 s scene is
+`ReviewRequired`).
+
+Alignment: the runner receives the audio path **and the narration text**. The
+output must carry `fidelity`; below `governor.min_narration_fidelity` the stage
+raises `ReviewRequired` with `{method, fidelity}` details.
+
 Series jobs: outline, script, critique, storyboard, and metadata prompts
 receive the stage's slice of the job's `series_context` as a `series` data
 key plus a rule that it is untrusted style data, never evidence. Standalone
@@ -65,6 +82,7 @@ incomplete stage.
 - Narration that does not match the script (low fidelity) fails closed.
 - Inputs that cannot fit the route's context fail closed without a model load.
 - Scene JSON cannot contain arbitrary renderer code.
+- Storyboard narration is copied from the script, never model-written.
 - Model output length is bounded by the grammar where llama.cpp allows it;
   leaked reasoning is rejected before it becomes stage output.
 - Series guidance never reaches research/verification and cannot satisfy a

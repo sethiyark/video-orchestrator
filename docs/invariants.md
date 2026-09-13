@@ -37,6 +37,8 @@ tests.
 - Storyboard components are a closed enum; no LLM shell/code execution.
   `SeriesAsset` references an existing active series image/logo by id only.
 - Scripts far shorter than their outline fail closed.
+- Storyboard scenes reference script sentences; narration text is copied by
+  the provider.
 - Series bibles, themes, and glossaries are style data, never evidence. A job
   snapshots them at creation; a changed bible/theme blocks `/run` until
   Restart rebinds the snapshot. Library sources are copied into jobs, never

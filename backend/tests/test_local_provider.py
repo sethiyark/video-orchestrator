@@ -290,6 +290,57 @@ def test_scene_schema_rejects_arbitrary_code_and_live_render_is_explicit(tmp_pat
         asyncio.run(provider.execute("render", job))
 
 
+def card(first, last):
+    return {
+        "first_sentence": first,
+        "last_sentence": last,
+        "component": "DefinitionCard",
+        "props": {"title": "DNS", "body": "Names to addresses"},
+    }
+
+
+def test_storyboard_plans_sentence_chunks_and_copies_narration(tmp_path):
+    text = " ".join(f"Sentence number {i} explains one DNS step." for i in range(1, 21))
+    provider, runner, job = setup(
+        tmp_path,
+        [{"scenes": [card(1, 4), card(5, 8), card(9, 16)]}]
+        + [{"scenes": [card(17, 20)]}],
+    )
+    complete(job, "script", {"text": text, "claim_ids": ["c1"], "provenance": {}})
+    with pytest.raises(ValueError, match="1-4 sentences"):
+        # The chunk schema rejects a 9–16 span (the child repairs it in real runs).
+        asyncio.run(provider.execute("storyboard", job))
+
+    runner.outputs = iter(
+        [
+            {"scenes": [card(1, 4), card(5, 8), card(9, 12), card(13, 16)]},
+            {"scenes": [card(17, 18), card(19, 20)]},
+        ]
+    )
+    runner.calls.clear()
+    result = asyncio.run(provider.execute("storyboard", job))
+    # One model load, one request per 16-sentence chunk; the model never sees
+    # or re-emits a whole script.
+    ((role, payload),) = runner.calls
+    assert role == "quality" and len(payload["requests"]) == 2
+    assert {r["schema_name"] for r in payload["requests"]} == {"StoryboardChunk"}
+    second = json.loads(payload["requests"][1]["messages"][1]["content"])
+    assert [s["n"] for s in second["sentences"]] == [17, 18, 19, 20]
+    scenes = result["scenes"]
+    assert [s["scene_id"] for s in scenes] == [f"scene_{i:03d}" for i in range(1, 7)]
+    assert " ".join(s["narration_text"] for s in scenes) == text
+    assert scenes[0]["duration_seconds"] == round(28 / 2.5, 1)
+
+    runner.outputs = iter(
+        [
+            {"scenes": [card(1, 4), card(5, 8), card(9, 12), card(13, 15)]},
+            {"scenes": [card(17, 20)]},
+        ]
+    )
+    with pytest.raises(ReviewRequired, match="sentences 1-16"):
+        asyncio.run(provider.execute("storyboard", job))
+
+
 def test_truncated_script_fails_closed_against_outline(tmp_path):
     leak = {
         "text": "DNS maps domain names to IP addresses quickly.",

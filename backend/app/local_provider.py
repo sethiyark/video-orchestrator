@@ -3,6 +3,7 @@
 import hashlib
 import json
 import math
+import re
 import tempfile
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from .schemas import (
     Research,
     Script,
     Storyboard,
+    StoryboardChunk,
     Verification,
 )
 from .series.library import VISUAL_KINDS, SeriesLibrary
@@ -24,7 +26,12 @@ from .series.store import SeriesNotFound
 
 CRITICS = ("accuracy", "retention", "clarity", "originality", "style")
 
-# Narration pace used for the script length floor.
+# Same sentence boundaries the narration runtime uses.
+SENTENCE_SPLIT = r"(?<=[.!?])\s+|\n+"
+# Script sentences per storyboard request: bounds each response's size however
+# long the script is. Requests share one model load.
+STORYBOARD_CHUNK_SENTENCES = 16
+# Narration pace used for scene durations and the script length floor.
 WORDS_PER_SECOND = 2.5
 # A script shorter than this share of its outline's estimated runtime is a
 # truncated or off-task generation, not a concise explainer.
@@ -95,6 +102,10 @@ def image_prompt(job, scene):
     style = style.get("image_style", "")
     prompt = scene["props"]["prompt"]
     return f"{prompt}. Style: {style}" if style else prompt
+
+
+def sentences(text):
+    return [part.strip() for part in re.split(SENTENCE_SPLIT, text) if part.strip()]
 
 
 def script_body(script):
@@ -244,6 +255,80 @@ class LocalProvider:
                 f"(at least {minimum} words expected); the generation looks truncated "
                 "or off-task. Review the script or restart the job."
             )
+
+    async def storyboard(self, job, assets):
+        """Plan scenes over numbered script sentences in bounded chunks, then
+        assemble the Storyboard with the exact narration text and scene ids."""
+        lines = sentences(current_script(job)["text"])
+        if not lines:
+            raise ReviewRequired("Storyboard needs a script with narration text")
+        instructions, series = with_series(
+            job,
+            "storyboard",
+            "Plan visual scenes for the numbered narration sentences supplied. Every "
+            "sentence belongs to exactly one scene, in order: the first scene starts at "
+            "the first supplied number, each next scene starts right after the previous "
+            "one ends, and the last scene ends at the last supplied number. A scene covers "
+            "1 to 4 sentences. Do not repeat the narration; give only sentence numbers, a "
+            "component, and short props. Use only the allowed data schemas; never generate "
+            "code. Prefer DefinitionCard, AnimatedFlowDiagram, and BulletReveal. "
+            + (
+                "ImagePan may be used sparingly."
+                if self.config.images_enabled
+                else "Do not use ImagePan; image generation is disabled."
+            )
+            + (
+                " SeriesAsset may show one of the listed series_assets by its exact asset_id."
+                if assets
+                else " Do not use SeriesAsset; no series assets are available."
+            ),
+            {},
+        )
+        chunks = [
+            range(start, min(start + STORYBOARD_CHUNK_SENTENCES, len(lines)))
+            for start in range(0, len(lines), STORYBOARD_CHUNK_SENTENCES)
+        ]
+        requests = []
+        for chunk in chunks:
+            data = {
+                **series,
+                "sentences": [{"n": i + 1, "text": lines[i]} for i in chunk],
+            }
+            if assets:
+                data["series_assets"] = assets
+            requests.append((instructions, data, StoryboardChunk))
+        results = await self.llm_batch("storyboard", job, requests)
+        scenes = []
+        for chunk, result in zip(chunks, results):
+            planned = result["scenes"]
+            if (
+                planned[0]["first_sentence"] != chunk.start + 1
+                or planned[-1]["last_sentence"] != chunk.stop
+            ):
+                raise ReviewRequired(
+                    f"Storyboard did not cover narration sentences {chunk.start + 1}-"
+                    f"{chunk.stop} exactly"
+                )
+            for scene in planned:
+                text = " ".join(
+                    lines[scene["first_sentence"] - 1 : scene["last_sentence"]]
+                )
+                scenes.append(
+                    {
+                        "scene_id": f"scene_{len(scenes) + 1:03d}",
+                        "narration_text": text,
+                        "duration_seconds": round(
+                            max(len(text.split()) / WORDS_PER_SECOND, 2), 1
+                        ),
+                        "component": scene["component"],
+                        "props": scene["props"],
+                    }
+                )
+        try:
+            storyboard = Storyboard.model_validate({"scenes": scenes}).model_dump()
+        except ValueError as exc:
+            raise ReviewRequired(f"Storyboard is out of bounds: {exc}") from exc
+        return {**storyboard, "provenance": results[0]["provenance"]}
 
     async def execute(self, stage, job):
         result = await self._execute(stage, job)
@@ -419,25 +504,7 @@ class LocalProvider:
             )
         if stage == "storyboard":
             assets = self.series_assets(job)
-            instructions, data = with_series(
-                job,
-                stage,
-                "Create scenes using the exact supplied narration text. Use only the allowed data schemas; never generate code. Prefer DefinitionCard, AnimatedFlowDiagram, and BulletReveal. "
-                + (
-                    "ImagePan may be used sparingly."
-                    if self.config.images_enabled
-                    else "Do not use ImagePan; image generation is disabled."
-                )
-                + (
-                    " SeriesAsset may show one of the listed series_assets by its exact asset_id."
-                    if assets
-                    else " Do not use SeriesAsset; no series assets are available."
-                ),
-                current_script(job),
-            )
-            if assets:
-                data = {**data, "series_assets": assets}
-            result = await self.llm(stage, job, instructions, data, Storyboard)
+            result = await self.storyboard(job, assets)
             scenes = result["scenes"]
             if len({scene["scene_id"] for scene in scenes}) != len(scenes):
                 raise ReviewRequired("Storyboard has duplicate scene ids")

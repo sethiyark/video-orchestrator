@@ -78,14 +78,13 @@ class PipelineFixtureRunner:
                 "required_changes": [],
                 "optional_changes": [],
             },
-            "Storyboard": {
+            "StoryboardChunk": {
                 "scenes": [
                     {
-                        "scene_id": "scene_001",
+                        "first_sentence": 1,
+                        "last_sentence": 1,
                         "component": "DefinitionCard",
                         "props": {"title": "DNS", "body": "Domain name system"},
-                        "narration_text": "DNS maps domain names to IP addresses.",
-                        "duration_seconds": 10,
                     }
                 ]
             },

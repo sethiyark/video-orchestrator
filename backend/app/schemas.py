@@ -9,6 +9,7 @@ from pydantic import (
     ConfigDict,
     Field,
     HttpUrl,
+    model_validator,
 )
 
 # Chain-of-thought written into a JSON string instead of the answer: think tags,
@@ -160,6 +161,70 @@ Scene = Annotated[
 
 class Storyboard(StrictModel):
     scenes: list[Scene] = Field(min_length=1, max_length=120)
+
+
+class SentenceSpan(StrictModel):
+    """Script sentences a planned scene narrates, by the 1-based numbers supplied."""
+
+    first_sentence: int = Field(ge=1)
+    last_sentence: int = Field(ge=1)
+
+
+class CardPlan(SentenceSpan):
+    component: Literal["DefinitionCard"]
+    props: CardProps
+
+
+class FlowPlan(SentenceSpan):
+    component: Literal["AnimatedFlowDiagram"]
+    props: FlowProps
+
+
+class BulletPlan(SentenceSpan):
+    component: Literal["BulletReveal"]
+    props: BulletProps
+
+
+class ImagePlan(SentenceSpan):
+    component: Literal["ImagePan"]
+    props: ImageProps
+
+
+class SeriesAssetPlan(SentenceSpan):
+    component: Literal["SeriesAsset"]
+    props: SeriesAssetProps
+
+
+PlannedScene = Annotated[
+    CardPlan | FlowPlan | BulletPlan | ImagePlan | SeriesAssetPlan,
+    Field(discriminator="component"),
+]
+
+MAX_SCENE_SENTENCES = 4
+
+
+class StoryboardChunk(StrictModel):
+    """Model output for one slice of the script. The provider copies narration
+    text and assigns scene ids, so the model never re-emits the script."""
+
+    scenes: list[PlannedScene] = Field(min_length=1, max_length=20)
+
+    @model_validator(mode="after")
+    def contiguous(self):
+        previous = None
+        for scene in self.scenes:
+            span = scene.last_sentence - scene.first_sentence + 1
+            if not 1 <= span <= MAX_SCENE_SENTENCES:
+                raise ValueError(
+                    f"each scene must cover 1-{MAX_SCENE_SENTENCES} sentences "
+                    f"(got {scene.first_sentence}-{scene.last_sentence})"
+                )
+            if previous is not None and scene.first_sentence != previous + 1:
+                raise ValueError(
+                    "scenes must cover consecutive sentences with no gaps or overlaps"
+                )
+            previous = scene.last_sentence
+        return self
 
 
 class Metadata(StrictModel):

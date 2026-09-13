@@ -265,9 +265,8 @@ def test_local_prompts_receive_stage_specific_series_guidance(tmp_path):
     }
     critic = {"score": 9, "issues": [], "required_changes": [], "optional_changes": []}
     scene = {
-        "scene_id": "scene_001",
-        "narration_text": script["text"],
-        "duration_seconds": 5,
+        "first_sentence": 1,
+        "last_sentence": 1,
         "component": "DefinitionCard",
         "props": {"title": "DNS", "body": "Names to addresses"},
     }
@@ -552,9 +551,8 @@ def test_promote_media_artifact_into_series_library(tmp_path):
 
 def storyboard_scene(asset_id):
     return {
-        "scene_id": "scene_001",
-        "narration_text": "DNS maps names to addresses for every lookup you make.",
-        "duration_seconds": 4,
+        "first_sentence": 1,
+        "last_sentence": 1,
         "component": "SeriesAsset",
         "props": {"title": "Our logo", "asset_id": asset_id},
     }
