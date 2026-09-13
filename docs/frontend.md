@@ -25,7 +25,7 @@ Vite: `127.0.0.1:3091`. npm scripts: `dev`, `build`, `typecheck`, `format`.
 
 ## How it is called
 
-`npm run dev` against a running API. CORS must include the Vite origin.
+From the repo root, `make dev` starts the API (`uv run uvicorn` on `127.0.0.1:8091`) and `npm run dev` together. `make dev-ui` (alias `make dashboard`) runs only the dashboard. CORS must include the Vite origin.
 
 ## Invariants
 

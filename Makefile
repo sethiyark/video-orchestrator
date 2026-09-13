@@ -1,13 +1,23 @@
-.PHONY: setup dev test worker dashboard lint format render-sample run-sample-pipeline demo-script test-llm
+.PHONY: setup dev dev-api dev-ui test worker dashboard lint format render-sample run-sample-pipeline demo-script test-llm
 
 setup:
 	cd backend && uv sync --group dev
 	cd frontend && npm ci
 
+# API :8091 and dashboard :3091. Ctrl+C stops both.
 dev:
-	@echo "Terminal 1: cd backend && uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8091"
-	@echo "Terminal 2: cd frontend && npm run dev"
-	@echo "Optional stack: docker compose up postgres redis minio temporal temporal-ui"
+	@echo "API        http://127.0.0.1:8091/docs"
+	@echo "Dashboard  http://127.0.0.1:3091"
+	@trap 'kill 0' INT TERM EXIT; \
+	(cd backend && uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8091) & \
+	(cd frontend && npm run dev) & \
+	wait
+
+dev-api:
+	cd backend && uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8091
+
+dev-ui:
+	cd frontend && npm run dev
 
 test:
 	cd backend && uv run pytest
@@ -26,8 +36,7 @@ format:
 worker:
 	cd backend && TEMPORAL_TARGET=$${TEMPORAL_TARGET:-127.0.0.1:7233} uv run python -m app.orchestrator.worker
 
-dashboard:
-	cd frontend && npm run dev
+dashboard: dev-ui
 
 render-sample:
 	@echo "Phase 6: Remotion sample render is not implemented yet"

@@ -8,23 +8,14 @@ The dashboard supports drafts, pipeline progress, stage outputs, model readiness
 
 Requirements: Node.js 22.12+ (`nvm use`), Python 3.12+, and [uv](https://docs.astral.sh/uv/).
 
-Terminal 1:
+From the repository root, install once and run both servers:
 
 ```sh
-cd backend
-uv sync
-uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8091
+make setup
+make dev
 ```
 
-Terminal 2:
-
-```sh
-cd frontend
-npm ci
-npm run dev
-```
-
-Open [the dashboard](http://localhost:3091) or [API docs](http://localhost:8091/docs).
+That starts the API on [8091](http://127.0.0.1:8091/docs) and the dashboard on [3091](http://127.0.0.1:3091). Ctrl+C stops both. To run one process: `make dev-api` or `make dev-ui`.
 
 The default is **mock mode**. It needs no GPU, model files, tokens, or Docker. Mock completion means a simulation finished; it produces no real video or upload.
 
@@ -173,7 +164,7 @@ docker compose up --build
 
 Starts PostgreSQL (pgvector), Redis, MinIO, Temporal, Temporal UI (`http://127.0.0.1:8088`), the API (`http://127.0.0.1:8091`), and a Temporal worker. The API image includes base dependencies and runs in mock mode. Persist app files in `video-data`; run the frontend locally. Native GPU inference is intended to run on the host until a CUDA image is added.
 
-`make setup`, `make test`, and `make worker` are documented in the Makefile. `make run-sample-pipeline` lands in later phases.
+`make setup`, `make dev`, `make test`, and `make worker` are documented in the Makefile. `make run-sample-pipeline` lands in later phases.
 
 ## Verification
 

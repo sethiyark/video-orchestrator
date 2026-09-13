@@ -28,6 +28,8 @@ Claude Code loads this file via `@AGENTS.md` in `CLAUDE.md` — keep that pointe
 
 ## Commands
 
+From the repository root, `make setup` then `make dev` starts the API (`127.0.0.1:8091`) and dashboard (`127.0.0.1:3091`). Ctrl+C stops both. `make dev-api` / `make dev-ui` run one process.
+
 ```bash
 cd backend
 uv sync
