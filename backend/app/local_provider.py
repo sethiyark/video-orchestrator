@@ -53,10 +53,14 @@ def current_script(job):
 class LocalProvider:
     def __init__(self, settings, store, runner=None):
         self.settings = settings
-        self.config = settings.models
         self.store = store
         self.runner = runner or LocalRunner(settings)
         self.artifacts = Artifacts(settings.artifact_dir)
+
+    @property
+    def config(self):
+        """Read live so dashboard overrides change config_hash immediately."""
+        return self.settings.models
 
     @property
     def config_hash(self):

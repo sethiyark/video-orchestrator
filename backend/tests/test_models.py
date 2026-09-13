@@ -186,3 +186,55 @@ def test_runner_kills_child_on_timeout_and_releases_lock(tmp_path):
         assert runner.gpu.active is None
 
     asyncio.run(scenario())
+
+
+def _isolated(tmp_path, monkeypatch):
+    monkeypatch.setenv("MODEL_OVERLAY", str(tmp_path / "models.local.yaml"))
+    settings = Settings()
+    settings.cache_dir = tmp_path / "models"
+    return settings
+
+
+def test_overlay_merges_over_profile(tmp_path, monkeypatch):
+    overlay = tmp_path / "models.local.yaml"
+    overlay.write_text(yaml.safe_dump({"models": {"fast": {"revision": "abc"}}}))
+    monkeypatch.setenv("MODEL_OVERLAY", str(overlay))
+    settings = Settings()
+    assert settings.models.models["fast"].revision == "abc"
+    assert settings.model_overrides == {"models": {"fast": {"revision": "abc"}}}
+    assert settings.override_for("fast") == {"revision": "abc"}
+    assert settings.override_for("quality") == {}
+
+
+def test_overlay_rejects_non_overridable_fields(tmp_path, monkeypatch):
+    overlay = tmp_path / "models.local.yaml"
+    overlay.write_text(yaml.safe_dump({"models": {"fast": {"runtime": "kokoro"}}}))
+    monkeypatch.setenv("MODEL_OVERLAY", str(overlay))
+    with pytest.raises(ValueError, match="non-overridable"):
+        Settings()
+
+
+def test_save_and_reset_override_roundtrip(tmp_path, monkeypatch):
+    settings = _isolated(tmp_path, monkeypatch)
+    default_layers = settings.models.models["fast"].gpu_layers
+    settings.save_override("fast", {"gpu_layers": 8})
+    assert settings.models.models["fast"].gpu_layers == 8
+    assert settings.model_overlay_path.exists()
+    reloaded = Settings()
+    assert reloaded.models.models["fast"].gpu_layers == 8
+    settings.save_override("fast", {"revision": "pinned"})
+    assert settings.override_for("fast") == {"gpu_layers": 8, "revision": "pinned"}
+    settings.reset_override("fast")
+    assert settings.models.models["fast"].gpu_layers == default_layers
+    assert not settings.model_overlay_path.exists()
+    assert Settings().override_for("fast") == {}
+
+
+def test_invalid_override_rejected_and_nothing_written(tmp_path, monkeypatch):
+    settings = _isolated(tmp_path, monkeypatch)
+    with pytest.raises(ValueError, match="CPU"):
+        settings.save_override("embeddings", {"device": "cuda"})
+    assert not settings.model_overlay_path.exists()
+    assert settings.models.models["embeddings"].device == "cpu"
+    with pytest.raises(KeyError):
+        settings.save_override("nope", {"revision": "x"})

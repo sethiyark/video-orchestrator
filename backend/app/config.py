@@ -27,6 +27,37 @@ Runtime = Literal[
 METAL_RUNTIMES = {"llama_cpp", "kokoro", "qwen_tts"}
 CUDA_ONLY_RUNTIMES = {"diffusers", "diffusers_gguf"}
 
+# ModelSpec fields the dashboard may override per role. runtime, extra_repos, and
+# stage routes stay in the hardware profile so validate_routes keeps its meaning.
+OVERRIDABLE_FIELDS = frozenset(
+    {
+        "repo_id",
+        "revision",
+        "filename",
+        "files",
+        "device",
+        "gpu_layers",
+        "context_size",
+        "max_tokens",
+        "voice",
+        "speed",
+        "steps",
+    }
+)
+
+# Runtime → optional dependency group in pyproject.toml. The only install the
+# API will ever run is `uv sync --extra <one of these values>`.
+RUNTIME_EXTRAS: dict[str, str] = {
+    "llama_cpp": "llm",
+    "kokoro": "audio",
+    "qwen_tts": "audio",
+    "whisper": "audio",
+    "ctc_aligner": "audio",
+    "sentence_transformers": "embeddings",
+    "diffusers": "images",
+    "diffusers_gguf": "images",
+}
+
 
 def _check_relative(names):
     for name in names:
@@ -154,6 +185,35 @@ def _merge(base: dict, overlay: dict) -> dict:
     return merged
 
 
+def read_overlay(overlay_path: Path) -> dict:
+    """Operator overrides saved by the dashboard: {"models": {role: {field: value}}}."""
+    if not overlay_path.exists():
+        return {}
+    data = yaml.safe_load(overlay_path.read_text()) or {}
+    if not isinstance(data, dict) or not isinstance(data.get("models", {}), dict):
+        raise TypeError(f"{overlay_path} must be a mapping with a models section")
+    return data
+
+
+def _check_overlay(overlay: dict) -> None:
+    for role, fields in overlay.get("models", {}).items():
+        if not isinstance(fields, dict):
+            raise TypeError(f"Override for {role} must be a mapping")
+        unknown = set(fields) - OVERRIDABLE_FIELDS
+        if unknown:
+            raise ValueError(
+                f"Override for {role} touches non-overridable fields: {', '.join(sorted(unknown))}"
+            )
+
+
+def load_model_config(path: Path, overlay_path: Path) -> tuple[ModelConfig, dict]:
+    """Validate the profile at ``path`` merged with the overlay; return (config, overlay)."""
+    base = yaml.safe_load(path.read_text())
+    overlay = read_overlay(overlay_path)
+    _check_overlay(overlay)
+    return ModelConfig.model_validate(_merge(base, overlay)), overlay
+
+
 def load_channel_governor(env_name: str) -> ChannelGovernor:
     data = yaml.safe_load((ROOT / "config/default.yaml").read_text())
     overlay = ROOT / "config" / f"{env_name}.yaml"
@@ -180,8 +240,11 @@ class Settings:
         self.model_config_path = Path(
             os.getenv("MODEL_CONFIG", str(ROOT / "config/models.yaml"))
         )
-        self.models = ModelConfig.model_validate(
-            yaml.safe_load(self.model_config_path.read_text())
+        self.model_overlay_path = Path(
+            os.getenv("MODEL_OVERLAY", str(ROOT / "data/models.local.yaml"))
+        )
+        self.models, self.model_overrides = load_model_config(
+            self.model_config_path, self.model_overlay_path
         )
         self.cache_dir = Path(
             os.getenv("MODEL_CACHE_DIR", str(ROOT / "data/models"))
@@ -209,3 +272,43 @@ class Settings:
         if log_format not in ("json", "text"):
             raise ValueError("LOG_FORMAT must be json or text")
         self.log_format = log_format
+
+    def override_for(self, role: str) -> dict:
+        return dict(self.model_overrides.get("models", {}).get(role, {}))
+
+    def _apply_overlay(self, overlay: dict) -> ModelConfig:
+        """Validate the profile merged with ``overlay`` before anything is written."""
+        _check_overlay(overlay)
+        base = yaml.safe_load(self.model_config_path.read_text())
+        config = ModelConfig.model_validate(_merge(base, overlay))
+        path = self.model_overlay_path
+        if overlay.get("models"):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_suffix(".tmp")
+            temporary.write_text(yaml.safe_dump(overlay, sort_keys=True))
+            temporary.replace(path)
+        elif path.exists():
+            path.unlink()
+        self.models, self.model_overrides = config, overlay
+        return config
+
+    def save_override(self, role: str, fields: dict) -> ModelConfig:
+        """Merge ``fields`` into the role's overlay entry; raises ValueError when invalid."""
+        if role not in self.models.models:
+            raise KeyError(role)
+        overlay = {
+            **self.model_overrides,
+            "models": {
+                **self.model_overrides.get("models", {}),
+                role: {**self.override_for(role), **fields},
+            },
+        }
+        return self._apply_overlay(overlay)
+
+    def reset_override(self, role: str) -> ModelConfig:
+        models = {
+            key: value
+            for key, value in self.model_overrides.get("models", {}).items()
+            if key != role
+        }
+        return self._apply_overlay({**self.model_overrides, "models": models})

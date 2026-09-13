@@ -38,6 +38,8 @@ def main():
                 status = manifest["revision"]
             except ModelNotReady:
                 status = "not downloaded"
+            if role in settings.model_overrides.get("models", {}):
+                status += " (overridden)"
             print(f"{role}: {spec.repo_id} ({spec.runtime}, {spec.device}) — {status}")
 
 
