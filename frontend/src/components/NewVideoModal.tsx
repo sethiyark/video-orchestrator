@@ -1,13 +1,16 @@
 import { useState } from "react";
-import { useMutation } from "@tanstack/react-query";
-import { api, type Job } from "../lib/api";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { api, type Job, type Series, type Theme } from "../lib/api";
+import { LibrarySourcePicker } from "./series/LibrarySourcePicker";
 
 export function NewVideoModal({
   isLocal,
+  defaultSeriesId = "",
   onClose,
   onCreated,
 }: {
   isLocal: boolean;
+  defaultSeriesId?: string;
   onClose: () => void;
   onCreated: (job: Job) => void;
 }) {
@@ -15,11 +18,27 @@ export function NewVideoModal({
   const [brief, setBrief] = useState("");
   const [sourceUrl, setSourceUrl] = useState("");
   const [sourceExcerpt, setSourceExcerpt] = useState("");
+  const [seriesId, setSeriesId] = useState(defaultSeriesId);
+  const [themeId, setThemeId] = useState("");
+  const [librarySourceIds, setLibrarySourceIds] = useState<string[]>([]);
+  const needsSource = isLocal && librarySourceIds.length === 0;
+  const series = useQuery({
+    queryKey: ["series"],
+    queryFn: () => api<Series[]>("/series"),
+  });
+  const themes = useQuery({
+    queryKey: ["series", seriesId, "themes"],
+    queryFn: () => api<Theme[]>(`/series/${seriesId}/themes`),
+    enabled: !!seriesId,
+  });
   const create = useMutation({
     mutationFn: () =>
       api<Job>("/jobs", {
         title,
         brief,
+        series_id: seriesId || null,
+        theme_id: (seriesId && themeId) || null,
+        library_source_ids: seriesId ? librarySourceIds : [],
         sources: sourceUrl
           ? [
               {
@@ -71,13 +90,62 @@ export function NewVideoModal({
             onChange={(e) => setBrief(e.target.value)}
             placeholder="Audience, key points, tone, and target length…"
           />
+          {(series.data?.length ?? 0) > 0 && (
+            <>
+              <label htmlFor="series">
+                Series <span>(optional)</span>
+              </label>
+              <select
+                id="series"
+                value={seriesId}
+                onChange={(e) => {
+                  setSeriesId(e.target.value);
+                  setThemeId("");
+                  setLibrarySourceIds([]);
+                }}
+              >
+                <option value="">Standalone video</option>
+                {series.data?.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+            </>
+          )}
+          {seriesId && (themes.data?.length ?? 0) > 0 && (
+            <>
+              <label htmlFor="theme">
+                Theme <span>(optional)</span>
+              </label>
+              <select
+                id="theme"
+                value={themeId}
+                onChange={(e) => setThemeId(e.target.value)}
+              >
+                <option value="">No theme</option>
+                {themes.data?.map((theme) => (
+                  <option key={theme.id} value={theme.id}>
+                    {theme.name}
+                  </option>
+                ))}
+              </select>
+            </>
+          )}
+          {seriesId && (
+            <LibrarySourcePicker
+              seriesId={seriesId}
+              selected={librarySourceIds}
+              onChange={setLibrarySourceIds}
+            />
+          )}
           <label htmlFor="source-url">
-            Source URL {isLocal ? "(required)" : "(optional)"}
+            Source URL {needsSource ? "(required)" : "(optional)"}
           </label>
           <input
             id="source-url"
             type="url"
-            required={isLocal || !!sourceExcerpt}
+            required={needsSource || !!sourceExcerpt}
             value={sourceUrl}
             onChange={(e) => setSourceUrl(e.target.value)}
             placeholder="https://example.com/technical-reference"
@@ -88,7 +156,7 @@ export function NewVideoModal({
             rows={5}
             minLength={20}
             maxLength={6000}
-            required={isLocal || !!sourceUrl}
+            required={needsSource || !!sourceUrl}
             value={sourceExcerpt}
             onChange={(e) => setSourceExcerpt(e.target.value)}
             placeholder="Paste the evidence the research and verification models should use…"

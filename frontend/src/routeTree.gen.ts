@@ -14,7 +14,9 @@ import { Route as CompletedRouteImport } from './routes/completed'
 import { Route as ConfigurationRouteImport } from './routes/configuration'
 import { Route as ProductionRouteImport } from './routes/production'
 import { Route as ReviewRouteImport } from './routes/review'
+import { Route as SeriesRouteImport } from './routes/series'
 import { Route as ProductionJobIdRouteImport } from './routes/production_.$jobId'
+import { Route as SeriesSeriesIdRouteImport } from './routes/series_.$seriesId'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -41,9 +43,19 @@ const ReviewRoute = ReviewRouteImport.update({
   path: '/review',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SeriesRoute = SeriesRouteImport.update({
+  id: '/series',
+  path: '/series',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ProductionJobIdRoute = ProductionJobIdRouteImport.update({
   id: '/production_/$jobId',
   path: '/production/$jobId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SeriesSeriesIdRoute = SeriesSeriesIdRouteImport.update({
+  id: '/series_/$seriesId',
+  path: '/series/$seriesId',
   getParentRoute: () => rootRouteImport,
 } as any)
 
@@ -53,7 +65,9 @@ export interface FileRoutesByFullPath {
   '/configuration': typeof ConfigurationRoute
   '/production': typeof ProductionRoute
   '/review': typeof ReviewRoute
+  '/series': typeof SeriesRoute
   '/production/$jobId': typeof ProductionJobIdRoute
+  '/series/$seriesId': typeof SeriesSeriesIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -61,7 +75,9 @@ export interface FileRoutesByTo {
   '/configuration': typeof ConfigurationRoute
   '/production': typeof ProductionRoute
   '/review': typeof ReviewRoute
+  '/series': typeof SeriesRoute
   '/production/$jobId': typeof ProductionJobIdRoute
+  '/series/$seriesId': typeof SeriesSeriesIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -70,7 +86,9 @@ export interface FileRoutesById {
   '/configuration': typeof ConfigurationRoute
   '/production': typeof ProductionRoute
   '/review': typeof ReviewRoute
+  '/series': typeof SeriesRoute
   '/production_/$jobId': typeof ProductionJobIdRoute
+  '/series_/$seriesId': typeof SeriesSeriesIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -80,7 +98,9 @@ export interface FileRouteTypes {
     | '/configuration'
     | '/production'
     | '/review'
+    | '/series'
     | '/production/$jobId'
+    | '/series/$seriesId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -88,7 +108,9 @@ export interface FileRouteTypes {
     | '/configuration'
     | '/production'
     | '/review'
+    | '/series'
     | '/production/$jobId'
+    | '/series/$seriesId'
   id:
     | '__root__'
     | '/'
@@ -96,7 +118,9 @@ export interface FileRouteTypes {
     | '/configuration'
     | '/production'
     | '/review'
+    | '/series'
     | '/production_/$jobId'
+    | '/series_/$seriesId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -105,7 +129,9 @@ export interface RootRouteChildren {
   ConfigurationRoute: typeof ConfigurationRoute
   ProductionRoute: typeof ProductionRoute
   ReviewRoute: typeof ReviewRoute
+  SeriesRoute: typeof SeriesRoute
   ProductionJobIdRoute: typeof ProductionJobIdRoute
+  SeriesSeriesIdRoute: typeof SeriesSeriesIdRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -145,11 +171,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ReviewRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/series': {
+      id: '/series'
+      path: '/series'
+      fullPath: '/series'
+      preLoaderRoute: typeof SeriesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/production_/$jobId': {
       id: '/production_/$jobId'
       path: '/production/$jobId'
       fullPath: '/production/$jobId'
       preLoaderRoute: typeof ProductionJobIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/series_/$seriesId': {
+      id: '/series_/$seriesId'
+      path: '/series/$seriesId'
+      fullPath: '/series/$seriesId'
+      preLoaderRoute: typeof SeriesSeriesIdRouteImport
       parentRoute: typeof rootRouteImport
     }
   }
@@ -161,7 +201,9 @@ const rootRouteChildren: RootRouteChildren = {
   ConfigurationRoute: ConfigurationRoute,
   ProductionRoute: ProductionRoute,
   ReviewRoute: ReviewRoute,
+  SeriesRoute: SeriesRoute,
   ProductionJobIdRoute: ProductionJobIdRoute,
+  SeriesSeriesIdRoute: SeriesSeriesIdRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

@@ -1,8 +1,25 @@
+import { useState } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Check, Play, RotateCcw, Trash2 } from "lucide-react";
-import { api, apiDelete, artifactUrl, type Job } from "../lib/api";
-import { configChanged, label } from "../lib/format";
+import {
+  AlertTriangle,
+  ArrowLeft,
+  BookOpen,
+  BookUp,
+  Check,
+  Play,
+  RotateCcw,
+  Trash2,
+} from "lucide-react";
+import {
+  api,
+  apiDelete,
+  artifactUrl,
+  type AssetKind,
+  type Job,
+  type SeriesAsset,
+} from "../lib/api";
+import { label, needsRestart } from "../lib/format";
 
 export const Route = createFileRoute("/production_/$jobId")({
   component: ProductionDetail,
@@ -23,6 +40,45 @@ function ProductionDetail() {
       api<Job>(`/jobs/${id}/${action}`, {}),
     onSuccess: () => client.invalidateQueries({ queryKey: ["jobs"] }),
   });
+  const [promoted, setPromoted] = useState("");
+  const promote = useMutation({
+    mutationFn: ({
+      artifactId,
+      name,
+      kind,
+    }: {
+      artifactId: string;
+      name: string;
+      kind: AssetKind;
+    }) =>
+      api<SeriesAsset>(`/jobs/${jobId}/artifacts/${artifactId}/promote`, {
+        name,
+        kind,
+      }),
+    onSuccess: (asset) => {
+      setPromoted(
+        asset.duplicate
+          ? `Already in the series library as “${asset.name}”.`
+          : `Added “${asset.name}” to the series library.`,
+      );
+      void client.invalidateQueries({ queryKey: ["series"] });
+    },
+  });
+  const promoteButton = (artifactId: string, fallback: string, kind: AssetKind) =>
+    current?.series_id ? (
+      <button
+        type="button"
+        className="secondary promote"
+        disabled={promote.isPending}
+        onClick={() => {
+          const name = window.prompt("Name in the series library", fallback);
+          if (name?.trim())
+            promote.mutate({ artifactId, name: name.trim(), kind });
+        }}
+      >
+        <BookUp size={13} /> Promote to series
+      </button>
+    ) : null;
   const deleteJob = useMutation({
     mutationFn: (id: string) => apiDelete(`/jobs/${id}`),
     onSuccess: () => {
@@ -60,12 +116,24 @@ function ProductionDetail() {
                 <div className="min-width">
                   <div className="eyebrow">PRODUCTION DETAILS</div>
                   <h2>{current.title}</h2>
+                  {current.series_context && (
+                    <Link
+                      className="series-badge"
+                      to="/series/$seriesId"
+                      params={{ seriesId: current.series_context.series.id }}
+                    >
+                      <BookOpen size={13} /> {current.series_context.series.name}
+                      {current.series_context.theme &&
+                        ` · ${current.series_context.theme.name}`}
+                      {` · bible v${current.series_context.bible_version}`}
+                    </Link>
+                  )}
                 </div>
                 <div className="actions">
                   {["draft", "failed"].includes(current.status) && (
                     <button
                       className={
-                        configChanged(current, action.error?.message)
+                        needsRestart(current, action.error?.message)
                           ? "secondary"
                           : "primary"
                       }
@@ -88,7 +156,7 @@ function ProductionDetail() {
                   ].includes(current.status) && (
                     <button
                       className={
-                        configChanged(current, action.error?.message)
+                        needsRestart(current, action.error?.message)
                           ? "primary"
                           : "secondary"
                       }
@@ -127,19 +195,31 @@ function ProductionDetail() {
                   </button>
                 </div>
               </div>
+              {current.series_stale && (
+                <div className="review-note">
+                  <AlertTriangle size={15} /> The series bible or theme changed
+                  since this video was created. Restart the pipeline to use the
+                  current guidance.
+                </div>
+              )}
               {current.status === "awaiting_approval" && (
                 <div className="review-note">
                   Review the outputs below before approving. All outputs are
                   placeholders; no playable video has been generated.
                 </div>
               )}
-              {(current.error || action.error || deleteJob.error) && (
+              {(current.error ||
+                action.error ||
+                deleteJob.error ||
+                promote.error) && (
                 <p role="alert" className="error">
                   {action.error?.message ||
                     deleteJob.error?.message ||
+                    promote.error?.message ||
                     current.error}
                 </p>
               )}
+              {promoted && <p className="review-note">{promoted}</p>}
               <div className="stages">
                 {current.stages.map((stage, index) => (
                   <details key={stage.name}>
@@ -185,6 +265,34 @@ function ProductionDetail() {
                               Download narration WAV
                             </a>
                           )}
+                        {typeof stage.output.audio === "object" &&
+                          stage.output.audio &&
+                          "id" in stage.output.audio &&
+                          promoteButton(
+                            String(stage.output.audio.id),
+                            `${current.title} narration`,
+                            "audio",
+                          )}
+                        {Array.isArray(stage.output.images) &&
+                          stage.output.images.map((image, imageIndex) => {
+                            const id = (image as { artifact?: { id?: string } })
+                              .artifact?.id;
+                            return id ? (
+                              <span key={id} className="artifact-row">
+                                <a
+                                  className="artifact-link"
+                                  href={artifactUrl(current.id, id)}
+                                >
+                                  Download image {imageIndex + 1}
+                                </a>
+                                {promoteButton(
+                                  id,
+                                  `${current.title} image ${imageIndex + 1}`,
+                                  "image",
+                                )}
+                              </span>
+                            ) : null;
+                          })}
                       </div>
                     ) : (
                       <p className="muted">

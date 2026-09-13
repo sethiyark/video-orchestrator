@@ -11,6 +11,9 @@ Sources: [`frontend/src/routes/index.tsx`](../frontend/src/routes/index.tsx),
 [`frontend/src/components/NewVideoModal.tsx`](../frontend/src/components/NewVideoModal.tsx),
 [`frontend/src/components/ModelPanel.tsx`](../frontend/src/components/ModelPanel.tsx),
 [`frontend/src/components/ModelConfigModal.tsx`](../frontend/src/components/ModelConfigModal.tsx),
+[`frontend/src/routes/series.tsx`](../frontend/src/routes/series.tsx),
+[`frontend/src/routes/series_.$seriesId.tsx`](../frontend/src/routes/series_.$seriesId.tsx),
+[`frontend/src/components/series/`](../frontend/src/components/series),
 [`frontend/src/lib/api.ts`](../frontend/src/lib/api.ts),
 [`frontend/src/lib/format.ts`](../frontend/src/lib/format.ts),
 [`frontend/src/router.tsx`](../frontend/src/router.tsx).
@@ -22,7 +25,7 @@ and artifacts, show model cache/GPU. Thin client — no pipeline decisions.
 
 ## Public surface
 
-Six TanStack Router file routes:
+Eight TanStack Router file routes:
 
 - `/` (`routes/index.tsx`) — landing page. Sidebar (no tab highlighted) plus a
   centered welcome hero ("New video" CTA, opens `NewVideoModal`) and the
@@ -37,6 +40,27 @@ Six TanStack Router file routes:
   that hides `status === "completed"` jobs by default. `/review` filters to
   `awaiting_approval`, `/completed` to `completed`. Each job card is a `Link`
   to `/production/$jobId`.
+- `/series` (`routes/series.tsx`) — series cards (name, description, video
+  count, slug) and a "New series" modal that POSTs `/series` and navigates to
+  the detail page. Sidebar tab `series`; shared chrome in
+  `components/series/SeriesChrome.tsx` (`useWorkspace` polls `/jobs` 1s and
+  `/health` 15s).
+- `/series/$seriesId` (`routes/series_.$seriesId.tsx`, trailing underscore as
+  for production detail) — heading with "New video" (opens `NewVideoModal`
+  preset to the series) and "Delete series" (surfaces the 409 when videos
+  still use it), plus tabs:
+  **Bible** (`BibleTab` + `BibleFields`: voice, palette swatches, preferred
+  components, image style, glossary as `Term: definition` lines; "Save new
+  version" PUTs and invalidates `["jobs"]`), **Themes** (`ThemesTab`: cards
+  and a modal with name, blurb, and the same guidance fields), **Ideas**
+  (`IdeasTab`: backlog cards with Start video / Drop / Restore / Delete; the
+  start modal takes library sources and an optional URL + excerpt, required
+  in local mode when no library source is picked, then navigates to the new
+  job), **Assets** (`AssetsTab`: raw-body upload via `apiUpload` with name and
+  kind, image/audio/video previews via `assetUrl`, archive/restore, "Show
+  archived"), **Sources** (`SourcesTab`: add/remove reusable excerpts), and
+  **Videos** (jobs with `series_id`, theme and "bible changed" badges, and a
+  stale-count note).
 - `/configuration` (`routes/configuration.tsx`) — hosts `<ModelPanel />` full
   page (no longer a collapsible `<details>` — see below) under a
   "Configuration" heading, with the same sidebar chrome
@@ -55,9 +79,22 @@ Six TanStack Router file routes:
 
 `VITE_API_URL` or `http://localhost:8091`.
 
-Create form (`NewVideoModal`, used on `/` and `/production`): title, brief,
-optional source URL+excerpt (required in the UI when health
-`provider === "local"`). Actions POST `/jobs/{id}/run`, `/restart` (clears
+Create form (`NewVideoModal`, used on `/`, `/production`, and the series
+page): title, brief, optional series and theme selects (shown when series
+exist), library-source checkboxes (`LibrarySourcePicker`) for the chosen
+series, and an optional source URL+excerpt (required in the UI when health
+`provider === "local"` and no library source is selected).
+
+Job detail shows a series badge (series · theme · bible version, linking to
+the series) and, when `series_stale`, a warning banner; `needsRestart`
+(`lib/format.ts`) makes Restart the primary action for stale config or series.
+For series jobs, narration WAV and generated images get a "Promote to series"
+button (name via `window.prompt`) that POSTs
+`/jobs/{id}/artifacts/{artifact_id}/promote` and shows the result inline.
+
+`lib/api.ts` adds series types, `apiSend` (PUT/PATCH JSON), `apiUpload` (raw
+file body), `assetUrl`, and flattens FastAPI validation errors into
+`field: message` strings. Actions POST `/jobs/{id}/run`, `/restart` (clears
 stages and rebases `config_hash`), and `/approve`. Narration download via
 `artifactUrl`. When the job error mentions model configuration, Restart is
 the primary action.
@@ -99,4 +136,6 @@ No frontend unit/e2e suite yet. Verify in a browser after UI changes.
 
 ## Known limitations
 
-One source in the form vs API max 10. No auth. No generated OpenAPI types.
+One inline source in the form vs API max 10 (library sources add more). No
+auth. No generated OpenAPI types. Series pages poll jobs rather than using a
+series-scoped query. No storyboard preview of `SeriesAsset` scenes.

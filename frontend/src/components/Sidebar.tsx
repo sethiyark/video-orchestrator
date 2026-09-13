@@ -1,7 +1,21 @@
 import { Link } from "@tanstack/react-router";
-import { Clapperboard, Cpu, Film, Layers3, Settings, ShieldCheck } from "lucide-react";
+import {
+  BookOpen,
+  Clapperboard,
+  Cpu,
+  Film,
+  Layers3,
+  Settings,
+  ShieldCheck,
+} from "lucide-react";
 
-export type SidebarTab = "production" | "review" | "completed" | "configuration" | "none";
+export type SidebarTab =
+  | "production"
+  | "review"
+  | "completed"
+  | "series"
+  | "configuration"
+  | "none";
 
 export function Sidebar({
   active,
@@ -36,6 +50,9 @@ export function Sidebar({
       </Link>
       <Link className={active === "completed" ? "nav active" : "nav"} to="/completed">
         <Film size={18} /> Completed
+      </Link>
+      <Link className={active === "series" ? "nav active" : "nav"} to="/series">
+        <BookOpen size={18} /> Series
       </Link>
       <Link
         className={active === "configuration" ? "nav active" : "nav"}
