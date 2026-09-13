@@ -5,8 +5,9 @@ tests.
 
 ## GPU and processes
 
-- Only one GPU-heavy workload via `GPUManager.acquire`. Unload hooks run even
-  on failure.
+- Only one GPU-heavy workload via `GPUManager.acquire` (CUDA or Metal). Unload
+  hooks run even on failure. A child may answer several requests, but loads
+  one model.
 - Do not load FAST and QUALITY GGUF plus diffusion at once.
 - Embeddings stay on CPU.
 - One model worker per database (advisory lock or SQLite file lock).
@@ -25,6 +26,9 @@ tests.
 
 - Local jobs require source excerpts. URLs are not fetched.
 - Fabricated quotes and unverified-claim scripts fail closed.
+- Narration whose alignment fidelity is below `min_narration_fidelity` fails
+  closed; alignment always receives the script text.
+- Inputs over the route's context budget fail closed before a model load.
 - Storyboard components are a closed enum; no LLM shell/code execution.
 - Writer/research tool allowlists: see [logical-agents.md](logical-agents.md).
 
@@ -42,4 +46,4 @@ same change.
 ## Owning tests
 
 `test_pipeline.py`, `test_local_provider.py`, `test_local_api.py`,
-`test_models.py`, `test_database.py`, `test_control_plane.py`.
+`test_models.py`, `test_runtime.py`, `test_database.py`, `test_control_plane.py`.

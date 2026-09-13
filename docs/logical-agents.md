@@ -69,13 +69,15 @@ cannot write YouTube metadata. Compliance cannot override Governor.
 ## Critic loop (local pipeline)
 
 ```text
-draft → five critics → aggregate (mean of scores; any required_changes fail)
+draft → five critics in one model load (seeds 42+i, critic_temperature)
+  → aggregate (MINIMUM score; any required_changes fail)
   → pass Governor min_script_score
-  → else revision instructions → rewrite
-  → max attempts → ReviewRequired
+  → else required_changes only → rewrite (script route)
+  → critique_rounds exhausted → ReviewRequired
 ```
 
-Writer does not score itself.
+Writer does not score itself. The strictest critic decides; the mean is not
+used.
 
 ## Prompts
 
@@ -91,5 +93,6 @@ models, full text-to-video as a dependency.
 
 ## Related tests
 
-`test_source_grounding_and_model_routing`, `test_critics_have_bounded_independent_rounds`
+`test_source_grounding_and_model_routing`, `test_critics_have_bounded_independent_rounds`,
+`test_critique_rewrites_with_required_changes_only`
 in [`backend/tests/test_local_provider.py`](../backend/tests/test_local_provider.py).

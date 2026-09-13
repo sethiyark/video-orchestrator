@@ -46,7 +46,7 @@ Phase 1 persists the **control-plane** subset. Content tables arrive with the re
 - [x] FAST/QUALITY routing via YAML (existing)
 - [x] GPU scheduler (existing)
 - [ ] Shared `ModelProvider` HTTP llama.cpp / Ollama
-- [ ] Structured JSON generation helper + retries
+- [x] Structured JSON generation helper + retries (batched child, in-child repair)
 - [ ] Prompt files + versions
 - [ ] `model_runs` logging on every invocation
 - [ ] `make test-llm` smoke test
