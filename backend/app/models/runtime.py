@@ -23,19 +23,21 @@ def _sentences(text):
     return [s for s in re.split(SENTENCE_SPLIT, text) if s.strip()]
 
 
-# JSON-schema keys llama.cpp unrolls into nested repetition groups. A
-# ``maxLength`` of a few thousand exceeds its grammar limits and aborts the
-# child natively, so these bounds stay with pydantic validation only.
-GRAMMAR_UNSAFE_KEYS = ("minLength", "maxLength", "maxItems")
+# llama.cpp unrolls length bounds into nested repetition groups. Small bounds
+# compile and stop runaway lists/strings during decoding (a looping critic list
+# otherwise runs to max_tokens); a ``maxLength`` of 2000 already exceeds its
+# grammar limits and aborts the child natively. Larger bounds stay with pydantic.
+GRAMMAR_BOUND_LIMITS = {"minLength": 1000, "maxLength": 1000, "maxItems": 30}
 
 
 def grammar_schema(schema):
-    """Copy of ``schema`` without the length bounds llama.cpp cannot compile."""
+    """Copy of ``schema`` keeping only the length bounds llama.cpp can compile."""
     if isinstance(schema, dict):
         return {
             key: grammar_schema(value)
             for key, value in schema.items()
-            if key not in GRAMMAR_UNSAFE_KEYS
+            if key not in GRAMMAR_BOUND_LIMITS
+            or (isinstance(value, int) and value <= GRAMMAR_BOUND_LIMITS[key])
         }
     if isinstance(schema, list):
         return [grammar_schema(value) for value in schema]
@@ -69,36 +71,40 @@ def _disable_template_thinking(model):
     )
 
 
+class OutputTruncated(ValueError):
+    pass
+
+
 def _generate_json(model, spec, request, schemas):
-    """Grammar-constrained decode, validated in-process; one repair pass on failure."""
+    """Grammar-constrained decode, validated in-process; one repair pass on failure.
+
+    A validation error is repaired by showing the model its output and the error.
+    Output cut off at ``max_tokens`` is usually a loop, so the truncated text is
+    not replayed: the retry restarts from the original prompt with a new seed,
+    a repetition penalty, and an instruction to be concise.
+    """
     schema_cls = getattr(schemas, request["schema_name"])
     schema = grammar_schema(schema_cls.model_json_schema())
-    messages = [dict(message) for message in request["messages"]]
-    if spec.get("think_toggle") and messages and messages[0]["role"] == "system":
-        messages[0]["content"] = f"{messages[0]['content']} {spec['think_toggle']}"
-    error, content = None, ""
+    base = [dict(message) for message in request["messages"]]
+    if spec.get("think_toggle") and base and base[0]["role"] == "system":
+        base[0]["content"] = f"{base[0]['content']} {spec['think_toggle']}"
+    messages, error, seed, options = base, None, request.get("seed", 42), {}
     for attempt in range(2):
-        if error:
-            messages = messages + [
-                {"role": "assistant", "content": (content or "")[:4000]},
-                {
-                    "role": "user",
-                    "content": f"Your previous output was invalid: {error}. Return corrected JSON only.",
-                },
-            ]
         response = model.create_chat_completion(
             messages=messages,
             max_tokens=spec["max_tokens"],
             temperature=request.get("temperature", 0.3),
-            seed=request.get("seed", 42),
+            seed=seed,
             response_format={"type": "json_object", "schema": schema},
+            **options,
         )
         choice = response["choices"][0]
         content = choice["message"]["content"]
         try:
             if choice.get("finish_reason") == "length":
-                raise ValueError(
-                    "Model output reached max_tokens; increase the limit or shorten the input"
+                raise OutputTruncated(
+                    f"Model output reached max_tokens ({spec['max_tokens']}) before the "
+                    "JSON closed; it was likely repeating itself"
                 )
             return {
                 "result": schema_cls.model_validate(
@@ -106,8 +112,26 @@ def _generate_json(model, spec, request, schemas):
                 ).model_dump(),
                 "repaired": attempt > 0,
             }
+        except OutputTruncated as exc:
+            error = f"{type(exc).__name__}: {exc}"
+            messages = base + [
+                {
+                    "role": "user",
+                    "content": "Your previous answer ran past the output limit without "
+                    "finishing. Answer again as compact JSON: short list items, no "
+                    "repeated sentences, only what the schema requires.",
+                }
+            ]
+            seed, options = seed + 1, {"repeat_penalty": 1.1}
         except (ValueError, json.JSONDecodeError) as exc:
             error = f"{type(exc).__name__}: {str(exc)[:600]}"
+            messages = base + [
+                {"role": "assistant", "content": (content or "")[:4000]},
+                {
+                    "role": "user",
+                    "content": f"Your previous output was invalid: {error}. Return corrected JSON only.",
+                },
+            ]
     return {"error": error, "kind": "validation"}
 
 

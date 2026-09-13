@@ -58,6 +58,8 @@ incomplete stage.
 - Narration that does not match the script (low fidelity) fails closed.
 - Inputs that cannot fit the route's context fail closed without a model load.
 - Scene JSON cannot contain arbitrary renderer code.
+- Model output length is bounded by the grammar where llama.cpp allows it;
+  leaked reasoning is rejected before it becomes stage output.
 - Series guidance never reaches research/verification and cannot satisfy a
   claim; `SeriesAsset` ids outside the job's active series images/logos fail
   closed, at storyboard and again when pinned.

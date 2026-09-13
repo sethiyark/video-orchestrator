@@ -127,20 +127,26 @@ def test_think_toggle_renders_template_with_thinking_disabled(
     assert not hasattr(FakeLlama.instances[-1], "chat_handler")
 
 
-def test_grammar_schema_drops_length_bounds_pydantic_still_enforces(llama, tmp_path):
+def test_grammar_schema_keeps_only_compilable_bounds(llama, tmp_path):
     from app import schemas
 
     full = schemas.Research.model_json_schema()
     assert full["properties"]["summary"]["maxLength"] == 2000
-    stripped = json.dumps(grammar_schema(full))
-    for key in ("minLength", "maxLength", "maxItems"):
-        assert key not in stripped
+    stripped = grammar_schema(full)
+    # llama.cpp aborts on a 2000-char repetition; pydantic still enforces it.
+    assert "maxLength" not in stripped["properties"]["summary"]
+    claim = stripped["$defs"]["Claim"]["properties"]
+    assert claim["text"]["maxLength"] == 1000 and "maxLength" not in claim["quote"]
+    assert stripped["properties"]["claims"]["maxItems"] == 30
 
     FakeLlama.responses = [CRITIC]
     infer(spec(), str(tmp_path), {"requests": [request()]})
     (model,) = FakeLlama.instances
-    sent = json.dumps(model.calls[0][1]["response_format"]["schema"])
-    assert "maxLength" not in sent
+    sent = model.calls[0][1]["response_format"]["schema"]["properties"]
+    # Critic lists are bounded during decoding, so a looping critic cannot run
+    # to max_tokens.
+    assert sent["issues"]["maxItems"] == 6
+    assert sent["issues"]["items"]["maxLength"] == 300
     with pytest.raises(ValueError):
         schemas.Research.model_validate({"summary": "x" * 2001, "claims": []})
 
@@ -170,11 +176,61 @@ def test_repair_failure_is_reported_not_raised(llama, tmp_path):
     FakeLlama.responses = ["LENGTH", "not json"]
     out = infer(spec(), str(tmp_path), {"requests": [request()]})
     assert out["results"][0]["kind"] == "validation"
-    assert (
-        "max_tokens" in out["results"][0]["error"]
-        or "JSON" in out["results"][0]["error"]
-    )
+    assert "JSON" in out["results"][0]["error"]
     assert len(FakeLlama.instances[-1].calls) == 2
+
+
+def test_truncated_output_retries_fresh_not_replayed(llama, tmp_path):
+    FakeLlama.responses = ["LENGTH", CRITIC]
+    out = infer(spec(), str(tmp_path), {"requests": [request(seed=7)]})
+    assert out["results"][0]["repaired"] is True
+    first, second = FakeLlama.instances[-1].calls
+    # The looping output is not fed back; the retry changes seed and penalises repeats.
+    assert all(m["role"] != "assistant" for m in second[0])
+    assert second[0][:2] == first[0][:2] and "output limit" in second[0][-1]["content"]
+    assert (first[1]["seed"], second[1]["seed"]) == (7, 8)
+    assert "repeat_penalty" not in first[1] and second[1]["repeat_penalty"] == 1.1
+
+    FakeLlama.responses = ["LENGTH", "LENGTH"]
+    out = infer(spec(), str(tmp_path), {"requests": [request()]})
+    assert "max_tokens" in out["results"][0]["error"]
+
+
+def test_leaked_reasoning_is_rejected_for_repair(llama, tmp_path):
+    from app.schemas import Critic, Script
+
+    leak = "Okay, let's tackle this query. The user provided a detailed JSON structure."
+    for text in (
+        leak,
+        "<think>plan</think>DNS maps names to addresses.",
+        "First, I need to parse the JSON to understand it properly.",
+    ):
+        with pytest.raises(ValueError, match="reasoning"):
+            Script.model_validate({"text": text, "claim_ids": ["c1"]})
+    Script.model_validate(
+        {
+            "text": "So DNS maps names to addresses. The user wants a fast page.",
+            "claim_ids": ["c1"],
+        }
+    )
+    with pytest.raises(ValueError):
+        Critic.model_validate(
+            {
+                "score": 1,
+                "issues": ["x"] * 7,
+                "required_changes": [],
+                "optional_changes": [],
+            }
+        )
+
+    good = json.dumps(
+        {"text": "DNS maps domain names to IP addresses.", "claim_ids": ["c1"]}
+    )
+    FakeLlama.responses = [json.dumps({"text": leak, "claim_ids": ["c1"]}), good]
+    payload = {**request(), "schema_name": "Script"}
+    out = infer(spec(), str(tmp_path), {"requests": [payload]})
+    assert out["results"][0]["repaired"] is True
+    assert "reasoning" in FakeLlama.instances[-1].calls[1][0][-1]["content"]
 
 
 def test_whisper_reports_fidelity(tmp_path, monkeypatch):

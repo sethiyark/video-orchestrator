@@ -31,12 +31,23 @@ subprocesses, dashboard-triggered setup, operator CLI.
     "temperature"?}]}` → `{"results": [{"result", "repaired"} |
     {"error", "kind": "validation"}]}`. **One `Llama` construction per child**;
     each request is grammar-constrained to the pydantic schema named in
-    `app.schemas`, validated in the child, and re-prompted **once** with the
-    validation error before the item is reported as an error. The grammar is
-    built from `grammar_schema(...)`, which drops `minLength` / `maxLength` /
-    `maxItems`: llama.cpp unrolls those into nested repetition groups, and a
-    `maxLength` in the thousands exceeds its limits and segfaults the child.
-    Length bounds are enforced by pydantic validation only.
+    `app.schemas`, validated in the child, and re-prompted **once** before the
+    item is reported as an error. A validation error is repaired by replaying
+    the output with the error. Output cut off at `max_tokens`
+    (`finish_reason: length`, usually a repetition loop) raises
+    `OutputTruncated`; the retry is **not** shown the truncated text — it
+    restarts from the original messages plus a "be concise" instruction, with
+    `seed + 1` and `repeat_penalty: 1.1`. The grammar is built from
+    `grammar_schema(...)`, which keeps `minLength` / `maxLength` up to 1000 and
+    `maxItems` up to 30 (`GRAMMAR_BOUND_LIMITS`) and drops larger values:
+    llama.cpp unrolls those bounds into nested repetition groups, and a
+    `maxLength` of 2000 already fails to compile and aborts the child. Kept
+    bounds stop runaway lists and strings during decoding (e.g. `Critic` lists
+    of at most 6 items of 300 chars); dropped bounds are enforced by pydantic
+    validation only. `Script.text`, `Research.summary`, `Metadata.description`,
+    and critic items reject leaked reasoning (`schemas.REASONING_LEAK`: think
+    tags, "Okay, let's…"/"First, I…" openers, "the user provided…" in the first
+    300 chars), so it goes through the repair pass instead of becoming output.
     `think_toggle` is appended to the system message here. When it is set and
     the GGUF chat template references `enable_thinking` (Qwen3), the child also
     renders that template with `enable_thinking=False`, which pre-fills an empty

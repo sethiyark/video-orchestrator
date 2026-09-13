@@ -1,8 +1,39 @@
 """Bounded model outputs. Scene instructions contain data, never executable code."""
 
+import re
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    HttpUrl,
+)
+
+# Chain-of-thought written into a JSON string instead of the answer: think tags,
+# a planning opener, or the model narrating the request back in its first lines.
+REASONING_LEAK = re.compile(
+    r"</?think>"
+    r"|^\s*(okay|ok|alright|hmm|so)\b[\s,.!]*(let's|let me|i need|i'll|i will|i should)\b"
+    r"|^\s*(let me|i need to|first, i)\b"
+    r"|^.{0,300}\b(the|this) (user|query|request) (provided|asked|requested|is asking|has provided)\b",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def reject_reasoning(text: str) -> str:
+    if REASONING_LEAK.search(text):
+        raise ValueError(
+            "text contains model reasoning instead of the requested content; "
+            "return only the final content"
+        )
+    return text
+
+
+Prose = Annotated[str, AfterValidator(reject_reasoning)]
+# Short list items keep critic output bounded; the grammar enforces these.
+Note = Annotated[Prose, Field(max_length=300)]
 
 
 class StrictModel(BaseModel):
@@ -24,7 +55,7 @@ class Claim(StrictModel):
 
 
 class Research(StrictModel):
-    summary: str = Field(max_length=2000)
+    summary: Prose = Field(max_length=2000)
     claims: list[Claim] = Field(min_length=1, max_length=30)
 
 
@@ -32,7 +63,7 @@ class Verdict(StrictModel):
     claim_id: str
     supported: bool
     confidence: float = Field(ge=0, le=1)
-    reason: str
+    reason: str = Field(max_length=600)
 
 
 class Verification(StrictModel):
@@ -40,8 +71,8 @@ class Verification(StrictModel):
 
 
 class Section(StrictModel):
-    title: str
-    purpose: str
+    title: str = Field(max_length=160)
+    purpose: str = Field(max_length=400)
     claim_ids: list[str] = Field(min_length=1)
     estimated_seconds: float = Field(gt=0, le=180)
 
@@ -51,15 +82,15 @@ class Outline(StrictModel):
 
 
 class Script(StrictModel):
-    text: str = Field(min_length=30, max_length=30000)
+    text: Prose = Field(min_length=30, max_length=30000)
     claim_ids: list[str] = Field(min_length=1)
 
 
 class Critic(StrictModel):
     score: float = Field(ge=0, le=10)
-    issues: list[str]
-    required_changes: list[str]
-    optional_changes: list[str]
+    issues: list[Note] = Field(max_length=6)
+    required_changes: list[Note] = Field(max_length=6)
+    optional_changes: list[Note] = Field(max_length=6)
 
 
 class CardProps(StrictModel):
@@ -133,5 +164,5 @@ class Storyboard(StrictModel):
 
 class Metadata(StrictModel):
     title: str = Field(min_length=1, max_length=100)
-    description: str = Field(max_length=5000)
-    tags: list[str] = Field(max_length=20)
+    description: Prose = Field(max_length=5000)
+    tags: list[Annotated[str, Field(max_length=100)]] = Field(max_length=20)
