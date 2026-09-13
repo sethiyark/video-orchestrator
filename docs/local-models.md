@@ -39,7 +39,8 @@ Profiles (select with `MODEL_CONFIG`):
 
 `ModelSpec` fields beyond the repo: `device` (`cpu|cuda|metal`),
 `context_size`, `max_tokens`, `gpu_layers`, `think_toggle` (appended to the
-system prompt by the child; `/no_think` for Qwen3/SmolLM3, `null` to disable),
+system prompt by the child, which also renders a template that supports
+`enable_thinking` with it off; `/no_think` for Qwen3/SmolLM3, `null` to disable),
 `voice` (Kokoro), `speaker` (Qwen3-TTS), `speed`, `steps` (images),
 `extra_repos` (companion snapshots pinned in the same manifest), `priority`,
 `timeout_seconds`.

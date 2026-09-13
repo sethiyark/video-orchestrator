@@ -37,8 +37,12 @@ subprocesses, dashboard-triggered setup, operator CLI.
     `maxItems`: llama.cpp unrolls those into nested repetition groups, and a
     `maxLength` in the thousands exceeds its limits and segfaults the child.
     Length bounds are enforced by pydantic validation only.
-    `think_toggle` is appended to the system message here. `n_gpu_layers` is
-    honoured for `cuda` and `metal`.
+    `think_toggle` is appended to the system message here. When it is set and
+    the GGUF chat template references `enable_thinking` (Qwen3), the child also
+    renders that template with `enable_thinking=False`, which pre-fills an empty
+    `<think></think>` block: under a JSON grammar Qwen3 otherwise ignores
+    `/no_think` and writes its reasoning into the first string field (e.g.
+    `Script.text`). `n_gpu_layers` is honoured for `cuda` and `metal`.
   - `kokoro` / `qwen_tts`: sentence-chunked WAV, `{duration_seconds,
     sample_rate, segments, voice, speed}`. `metal` maps to torch `mps`.
   - `whisper`: transcript segments/words plus `method: asr_transcript` and
