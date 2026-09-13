@@ -1,9 +1,14 @@
 # Frontend
 
 Sources: [`frontend/src/routes/index.tsx`](../frontend/src/routes/index.tsx),
+[`frontend/src/routes/production.tsx`](../frontend/src/routes/production.tsx),
+[`frontend/src/routes/review.tsx`](../frontend/src/routes/review.tsx),
+[`frontend/src/routes/completed.tsx`](../frontend/src/routes/completed.tsx),
 [`frontend/src/routes/configuration.tsx`](../frontend/src/routes/configuration.tsx),
-[`frontend/src/routes/production.$jobId.tsx`](../frontend/src/routes/production.$jobId.tsx),
+[`frontend/src/routes/production_.$jobId.tsx`](../frontend/src/routes/production_.$jobId.tsx),
 [`frontend/src/components/Sidebar.tsx`](../frontend/src/components/Sidebar.tsx),
+[`frontend/src/components/JobsPage.tsx`](../frontend/src/components/JobsPage.tsx),
+[`frontend/src/components/NewVideoModal.tsx`](../frontend/src/components/NewVideoModal.tsx),
 [`frontend/src/components/ModelPanel.tsx`](../frontend/src/components/ModelPanel.tsx),
 [`frontend/src/components/ModelConfigModal.tsx`](../frontend/src/components/ModelConfigModal.tsx),
 [`frontend/src/lib/api.ts`](../frontend/src/lib/api.ts),
@@ -17,35 +22,53 @@ and artifacts, show model cache/GPU. Thin client — no pipeline decisions.
 
 ## Public surface
 
-Three TanStack Router file routes, sharing a `Sidebar` component
-(`active` tab, review-queue count, health) for the two list-style pages:
+Six TanStack Router file routes:
 
-- `/` (`routes/index.tsx`) — the production dashboard: stats, the job list,
-  and the "New video" form. Polls `GET /api/jobs` every 1s, `/api/health`
-  every 15s. The sidebar's Production/Review queue/Completed tabs switch a
-  local `filter` state in place (no navigation); the Configuration tab
-  navigates to `/configuration`. On the `all` filter, jobs with
-  `status === "completed"` are hidden by default behind a "Show completed"
-  checkbox (`showCompleted` state) — the Review queue and Completed tabs are
-  unaffected. Each job card is a `Link` to `/production/$jobId` (no more
-  inline expansion on this page).
-- `/configuration` (`routes/configuration.tsx`) — hosts `<ModelPanel />`
-  (moved out of `/`) under a "Configuration" heading, with the same sidebar
-  chrome (`active="configuration"`).
-- `/production/$jobId` (`routes/production.$jobId.tsx`) — a distraction-free,
-  sidebar-less detail page for one job (back link only). Reads `Route.useParams().jobId`,
-  queries the same `["jobs"]` cache key as `/` (so no duplicate polling), and
-  owns the Run/Retry/Restart/Approve actions and the per-stage `<details>`
-  list that used to live inline on `/`. `configChanged`/`label` helpers live
-  in `lib/format.ts`, shared with `/`.
+- `/` (`routes/index.tsx`) — landing page. Sidebar (no tab highlighted) plus a
+  centered welcome hero ("New video" CTA, opens `NewVideoModal`) and the
+  `.stats` summary cards (total/in-production/ready-for-review). No job list.
+  Polls `GET /api/jobs` every 1s, `/api/health` every 15s for the counts.
+  Creating a video navigates to `/production/$jobId`.
+- `/production`, `/review`, `/completed` (`routes/production.tsx`,
+  `routes/review.tsx`, `routes/completed.tsx`) — each a thin wrapper around
+  the shared `<JobsPage>` component (`components/JobsPage.tsx`), which owns
+  the sidebar, header, section heading/count, job grid, and (for
+  `/production` only) the "New video" button and a "Show completed" checkbox
+  that hides `status === "completed"` jobs by default. `/review` filters to
+  `awaiting_approval`, `/completed` to `completed`. Each job card is a `Link`
+  to `/production/$jobId`.
+- `/configuration` (`routes/configuration.tsx`) — hosts `<ModelPanel />` full
+  page (no longer a collapsible `<details>` — see below) under a
+  "Configuration" heading, with the same sidebar chrome
+  (`active="configuration"`).
+- `/production/$jobId` (file `routes/production_.$jobId.tsx` — the trailing
+  underscore on `production_` escapes TanStack Router's automatic layout
+  nesting under `/production`, so this route is a standalone sibling, not a
+  child needing `/production`'s component to render an `<Outlet/>`) — a
+  distraction-free, sidebar-less detail page for one job (back link to
+  `/production` only). Reads `Route.useParams().jobId`, queries the same
+  `["jobs"]` cache key as the list pages (so no duplicate polling), and owns
+  the Run/Retry/Restart/Approve actions and the per-stage `<details>` list.
+  `configChanged`/`label` helpers live in `lib/format.ts`, shared across
+  routes. `NewVideoModal` (`components/NewVideoModal.tsx`) is the shared
+  "New video" form, used by both `/` and `/production`.
 
 `VITE_API_URL` or `http://localhost:8091`.
 
-Create form (on `/`): title, brief, optional source URL+excerpt (required in
-the UI when health `provider === "local"`). Actions POST `/jobs/{id}/run`,
-`/restart` (clears stages and rebases `config_hash`), and `/approve`.
-Narration download via `artifactUrl`. When the job error mentions model
-configuration, Restart is the primary action.
+Create form (`NewVideoModal`, used on `/` and `/production`): title, brief,
+optional source URL+excerpt (required in the UI when health
+`provider === "local"`). Actions POST `/jobs/{id}/run`, `/restart` (clears
+stages and rebases `config_hash`), and `/approve`. Narration download via
+`artifactUrl`. When the job error mentions model configuration, Restart is
+the primary action.
+
+Delete: `apiDelete` (`lib/api.ts`) issues `DELETE /jobs/{id}` (no JSON body on
+204 success). Available in two places, both gated by a `window.confirm`
+naming the job title — any job status can be deleted, no state restriction:
+a trash icon on each `JobsPage` job card (revealed on hover, `stopPropagation`
++ `preventDefault` so it doesn't trigger the card's `Link`) that invalidates
+`["jobs"]` in place, and a "Delete pipeline" button in `production_.$jobId.tsx`'s
+actions row that invalidates `["jobs"]` and navigates back to `/production`.
 
 `ModelPanel` consumes `/api/models` (types `ModelStatus`, `ModelsResponse`,
 `SetupState` in `lib/api.ts`), polling every 15s, or every 2s while

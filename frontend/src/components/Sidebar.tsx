@@ -1,30 +1,17 @@
-import type { MouseEvent } from "react";
 import { Link } from "@tanstack/react-router";
 import { Clapperboard, Cpu, Film, Layers3, Settings, ShieldCheck } from "lucide-react";
 
-export type SidebarTab = "all" | "review" | "completed" | "configuration";
+export type SidebarTab = "production" | "review" | "completed" | "configuration" | "none";
 
 export function Sidebar({
   active,
   waitingCount,
   health,
-  onTab,
 }: {
   active: SidebarTab;
   waitingCount: number;
   health?: { provider: string; database: string };
-  /** When on the "/" route, switch tabs in place instead of re-navigating. */
-  onTab?: (tab: "all" | "review" | "completed") => void;
 }) {
-  const navProps = (tab: "all" | "review" | "completed") =>
-    onTab
-      ? {
-          onClick: (event: MouseEvent) => {
-            event.preventDefault();
-            onTab(tab);
-          },
-        }
-      : {};
   return (
     <aside className="sidebar">
       <Link className="brand" to="/">
@@ -40,26 +27,14 @@ export function Sidebar({
         </div>
       </div>
       <div className="nav-label">WORKSPACE</div>
-      <Link
-        className={active === "all" ? "nav active" : "nav"}
-        to="/"
-        {...navProps("all")}
-      >
+      <Link className={active === "production" ? "nav active" : "nav"} to="/production">
         <Layers3 size={18} /> Production
       </Link>
-      <Link
-        className={active === "review" ? "nav active" : "nav"}
-        to="/"
-        {...navProps("review")}
-      >
+      <Link className={active === "review" ? "nav active" : "nav"} to="/review">
         <ShieldCheck size={18} /> Review queue{" "}
         <span className="count">{waitingCount}</span>
       </Link>
-      <Link
-        className={active === "completed" ? "nav active" : "nav"}
-        to="/"
-        {...navProps("completed")}
-      >
+      <Link className={active === "completed" ? "nav active" : "nav"} to="/completed">
         <Film size={18} /> Completed
       </Link>
       <Link

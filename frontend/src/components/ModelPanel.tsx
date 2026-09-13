@@ -40,10 +40,10 @@ export function ModelPanel() {
     model.setup.install.state === "running";
   const editing = query.data?.models.find((m) => m.role === configuring);
   return (
-    <details className="model-panel">
-      <summary>
+    <section className="model-panel">
+      <div className="model-panel-heading">
         Model library <span>Hugging Face · Local inference</span>
-      </summary>
+      </div>
       {query.isPending && <p>Checking model cache…</p>}
       {query.isError && (
         <p role="alert">
@@ -185,6 +185,6 @@ export function ModelPanel() {
           }}
         />
       )}
-    </details>
+    </section>
   );
 }

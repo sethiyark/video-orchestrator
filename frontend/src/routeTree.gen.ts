@@ -10,12 +10,20 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as CompletedRouteImport } from './routes/completed'
 import { Route as ConfigurationRouteImport } from './routes/configuration'
-import { Route as ProductionJobIdRouteImport } from './routes/production.$jobId'
+import { Route as ProductionRouteImport } from './routes/production'
+import { Route as ReviewRouteImport } from './routes/review'
+import { Route as ProductionJobIdRouteImport } from './routes/production_.$jobId'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CompletedRoute = CompletedRouteImport.update({
+  id: '/completed',
+  path: '/completed',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ConfigurationRoute = ConfigurationRouteImport.update({
@@ -23,39 +31,80 @@ const ConfigurationRoute = ConfigurationRouteImport.update({
   path: '/configuration',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ProductionRoute = ProductionRouteImport.update({
+  id: '/production',
+  path: '/production',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ReviewRoute = ReviewRouteImport.update({
+  id: '/review',
+  path: '/review',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ProductionJobIdRoute = ProductionJobIdRouteImport.update({
-  id: '/production/$jobId',
+  id: '/production_/$jobId',
   path: '/production/$jobId',
   getParentRoute: () => rootRouteImport,
 } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/completed': typeof CompletedRoute
   '/configuration': typeof ConfigurationRoute
+  '/production': typeof ProductionRoute
+  '/review': typeof ReviewRoute
   '/production/$jobId': typeof ProductionJobIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/completed': typeof CompletedRoute
   '/configuration': typeof ConfigurationRoute
+  '/production': typeof ProductionRoute
+  '/review': typeof ReviewRoute
   '/production/$jobId': typeof ProductionJobIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/completed': typeof CompletedRoute
   '/configuration': typeof ConfigurationRoute
-  '/production/$jobId': typeof ProductionJobIdRoute
+  '/production': typeof ProductionRoute
+  '/review': typeof ReviewRoute
+  '/production_/$jobId': typeof ProductionJobIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/configuration' | '/production/$jobId'
+  fullPaths:
+    | '/'
+    | '/completed'
+    | '/configuration'
+    | '/production'
+    | '/review'
+    | '/production/$jobId'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/configuration' | '/production/$jobId'
-  id: '__root__' | '/' | '/configuration' | '/production/$jobId'
+  to:
+    | '/'
+    | '/completed'
+    | '/configuration'
+    | '/production'
+    | '/review'
+    | '/production/$jobId'
+  id:
+    | '__root__'
+    | '/'
+    | '/completed'
+    | '/configuration'
+    | '/production'
+    | '/review'
+    | '/production_/$jobId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  CompletedRoute: typeof CompletedRoute
   ConfigurationRoute: typeof ConfigurationRoute
+  ProductionRoute: typeof ProductionRoute
+  ReviewRoute: typeof ReviewRoute
   ProductionJobIdRoute: typeof ProductionJobIdRoute
 }
 
@@ -68,6 +117,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/completed': {
+      id: '/completed'
+      path: '/completed'
+      fullPath: '/completed'
+      preLoaderRoute: typeof CompletedRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/configuration': {
       id: '/configuration'
       path: '/configuration'
@@ -75,8 +131,22 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ConfigurationRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/production/$jobId': {
-      id: '/production/$jobId'
+    '/production': {
+      id: '/production'
+      path: '/production'
+      fullPath: '/production'
+      preLoaderRoute: typeof ProductionRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/review': {
+      id: '/review'
+      path: '/review'
+      fullPath: '/review'
+      preLoaderRoute: typeof ReviewRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/production_/$jobId': {
+      id: '/production_/$jobId'
       path: '/production/$jobId'
       fullPath: '/production/$jobId'
       preLoaderRoute: typeof ProductionJobIdRouteImport
@@ -87,7 +157,10 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  CompletedRoute: CompletedRoute,
   ConfigurationRoute: ConfigurationRoute,
+  ProductionRoute: ProductionRoute,
+  ReviewRoute: ReviewRoute,
   ProductionJobIdRoute: ProductionJobIdRoute,
 }
 export const routeTree = rootRouteImport

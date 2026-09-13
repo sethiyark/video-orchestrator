@@ -1,16 +1,17 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Check, Play, RotateCcw } from "lucide-react";
-import { api, artifactUrl, type Job } from "../lib/api";
+import { ArrowLeft, Check, Play, RotateCcw, Trash2 } from "lucide-react";
+import { api, apiDelete, artifactUrl, type Job } from "../lib/api";
 import { configChanged, label } from "../lib/format";
 
-export const Route = createFileRoute("/production/$jobId")({
+export const Route = createFileRoute("/production_/$jobId")({
   component: ProductionDetail,
 });
 
 function ProductionDetail() {
   const { jobId } = Route.useParams();
   const client = useQueryClient();
+  const navigate = useNavigate();
   const jobsQuery = useQuery({
     queryKey: ["jobs"],
     queryFn: () => api<Job[]>("/jobs"),
@@ -22,11 +23,18 @@ function ProductionDetail() {
       api<Job>(`/jobs/${id}/${action}`, {}),
     onSuccess: () => client.invalidateQueries({ queryKey: ["jobs"] }),
   });
+  const deleteJob = useMutation({
+    mutationFn: (id: string) => apiDelete(`/jobs/${id}`),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: ["jobs"] });
+      void navigate({ to: "/production" });
+    },
+  });
   return (
     <div className="app app-focused">
       <main>
         <header>
-          <Link className="back-link" to="/">
+          <Link className="back-link" to="/production">
             <ArrowLeft size={16} /> Back to production
           </Link>
         </header>
@@ -103,6 +111,20 @@ function ProductionDetail() {
                       <Check size={16} /> Approve mock upload
                     </button>
                   )}
+                  <button
+                    className="secondary danger"
+                    disabled={deleteJob.isPending}
+                    onClick={() => {
+                      if (
+                        window.confirm(
+                          `Delete "${current.title}"? This cannot be undone.`,
+                        )
+                      )
+                        deleteJob.mutate(current.id);
+                    }}
+                  >
+                    <Trash2 size={15} /> Delete pipeline
+                  </button>
                 </div>
               </div>
               {current.status === "awaiting_approval" && (
@@ -111,9 +133,11 @@ function ProductionDetail() {
                   placeholders; no playable video has been generated.
                 </div>
               )}
-              {(current.error || action.error) && (
+              {(current.error || action.error || deleteJob.error) && (
                 <p role="alert" className="error">
-                  {action.error?.message || current.error}
+                  {action.error?.message ||
+                    deleteJob.error?.message ||
+                    current.error}
                 </p>
               )}
               <div className="stages">
