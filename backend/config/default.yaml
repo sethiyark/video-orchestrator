@@ -1,0 +1,51 @@
+# Channel policy. Agents cannot override these values at runtime.
+channel:
+  slug: engineering-explainers
+  name: Engineering Explainers
+  language: en
+  niche: technology_engineering
+  max_long_videos_per_week: 3
+  max_shorts_per_week: 6
+
+content:
+  min_research_confidence: 0.90
+  min_script_score: 8.5
+  min_originality_score: 0.85
+  max_similarity_score: 0.60
+
+automation:
+  autonomous_publish: false
+
+comments:
+  automatic_reply: false
+
+external_llm:
+  enabled: false
+  provider: openai
+  max_daily_cost_usd: 2.0
+
+budgets:
+  max_llm_attempts_per_stage: 3
+  max_image_generations_per_video: 20
+  max_external_api_cost_per_day_usd: 0.0
+  max_external_api_cost_per_video_usd: 0.0
+
+human_required:
+  - copyright_claim
+  - youtube_policy_warning
+  - channel_strategy_change
+  - delete_published_video
+  - factual_confidence_below_hard_threshold
+
+observability:
+  log_format: json
+
+opportunity_weights:
+  search_demand: 0.16
+  competition: 0.12
+  evergreen_score: 0.14
+  channel_fit: 0.16
+  novelty_score: 0.10
+  visual_potential: 0.10
+  researchability: 0.12
+  predicted_retention: 0.10

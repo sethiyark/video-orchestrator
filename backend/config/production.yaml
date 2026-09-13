@@ -1,0 +1,7 @@
+# Production overlays. Bind the API to localhost or put it behind auth (Phase 13).
+observability:
+  log_format: json
+automation:
+  autonomous_publish: false
+external_llm:
+  enabled: false
