@@ -232,7 +232,7 @@ def create_app(
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.origins,
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "DELETE"],
         allow_headers=["Content-Type"],
     )
 
@@ -489,6 +489,12 @@ def create_app(
         if result is None:
             raise HTTPException(409, "Job is not ready for approval")
         return result
+
+    @app.delete("/api/jobs/{job_id}", status_code=204)
+    async def delete_job(job_id: str):
+        get_job(job_id)
+        store.delete(job_id)
+        return Response(status_code=204)
 
     return app
 

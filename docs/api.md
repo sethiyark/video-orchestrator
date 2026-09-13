@@ -28,8 +28,9 @@ CRUD, run/restart/approve, artifact download. No fill/model arithmetic.
 | POST | `/api/jobs/{id}/run` | `draft`/`failed` → `queued`; 409 if local `config_hash` is stale |
 | POST | `/api/jobs/{id}/restart` | Wipe stages, rebind `config_hash`, `queued`; not while queued/running |
 | POST | `/api/jobs/{id}/approve` | `awaiting_approval` → `queued` + `approved_at` |
+| DELETE | `/api/jobs/{id}` | 204; removes the job, its stage records, and attempts. Any status. 404 unknown job |
 
-CORS: `GET`/`POST`, origins from `CORS_ORIGINS` (default Vite `:3091`).
+CORS: `GET`/`POST`/`DELETE`, origins from `CORS_ORIGINS` (default Vite `:3091`).
 
 `JobInput`: title 1–160, brief ≤5000, ≤10 sources with unique ids.
 
@@ -57,8 +58,8 @@ alone. Setup state is `{state, started_at, ended_at, error, log}`.
 `test_models_endpoint_reports_setup_fields`,
 `test_download_endpoint_runs_hub_in_background`,
 `test_install_endpoint_uses_fixed_command`, `test_config_override_endpoints`,
-`test_config_change_fails_in_flight_job`, pipeline tests in
-`test_pipeline.py`.
+`test_config_change_fails_in_flight_job`, `test_delete_job_removes_job_and_attempts`,
+`test_delete_unknown_job_is_404`, pipeline tests in `test_pipeline.py`.
 
 ## Known limitations
 

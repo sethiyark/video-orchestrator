@@ -14,8 +14,8 @@ legacy SQLite `jobs` JSON import, exclusive worker lock.
 ## Public surface
 
 **v1 (pipeline):** `video_jobs`, `video_stages`, `stage_attempts`.
-`Store`: `list`, `get`, `save`, `create`, `transition`, `restart`, `claim`,
-`recover`, `start_attempt` / `finish_attempt`, `attempts`, `worker_lock`.
+`Store`: `list`, `get`, `save`, `create`, `transition`, `restart`, `delete`,
+`claim`, `recover`, `start_attempt` / `finish_attempt`, `attempts`, `worker_lock`.
 
 **Control plane (schema now, little pipeline use):** `channels`,
 `channel_configs`, `video_projects`, `workflow_runs`, `workflow_events`,
@@ -39,6 +39,10 @@ Revisions: `0001_relational_state`, `0002_control_plane`.
 - SQLite: `{database}.worker.lock` via `filelock`, timeout 0.
 - Legacy import is idempotent and preserves original stage pipelines.
 - Concurrent `transition` has one winner.
+- `delete` explicitly deletes `stage_attempts` then `video_stages` before the
+  `video_jobs` row in one transaction; `Attempt.job_id` has no DB-level
+  `ondelete=CASCADE`, so this order is required (`video_stages.job_id` does
+  cascade, but `delete` does not depend on it).
 
 ## Related tests
 

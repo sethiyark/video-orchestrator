@@ -39,6 +39,25 @@ def test_approval_gate_and_persistence(tmp_path):
         assert client.get("/api/jobs/missing").status_code == 404
 
 
+def test_delete_job_removes_job_and_attempts(tmp_path):
+    provider = MockProvider(0)
+    with TestClient(create_app(str(tmp_path / "jobs.db"), provider)) as client:
+        job_id = client.post("/api/jobs", json={"title": "Delete me"}).json()["id"]
+        client.post(f"/api/jobs/{job_id}/run")
+        wait(client, job_id, "awaiting_approval")
+        assert client.get(f"/api/jobs/{job_id}/attempts").json()
+
+        assert client.delete(f"/api/jobs/{job_id}").status_code == 204
+        assert client.get(f"/api/jobs/{job_id}").status_code == 404
+        assert client.get(f"/api/jobs/{job_id}/attempts").status_code == 404
+        assert job_id not in [job["id"] for job in client.get("/api/jobs").json()]
+
+
+def test_delete_unknown_job_is_404(tmp_path):
+    with TestClient(create_app(str(tmp_path / "jobs.db"), MockProvider(0))) as client:
+        assert client.delete("/api/jobs/missing").status_code == 404
+
+
 def test_retry_resumes_completed_stages(tmp_path):
     class FlakyProvider(MockProvider):
         failed = False

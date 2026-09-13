@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from filelock import FileLock
+from sqlalchemy import delete as sa_delete
 from sqlalchemy import inspect, select, text, update
 from sqlalchemy.orm import Session
 
@@ -171,6 +172,17 @@ class Store:
                 stage.status = "pending"
                 stage.output = None
         return self.get(job_id)
+
+    def delete(self, job_id):
+        """Remove a job and its attempts/stages. Returns False if it never existed."""
+        with Session(self.engine) as session, session.begin():
+            row = session.get(VideoJob, job_id)
+            if row is None:
+                return False
+            session.execute(sa_delete(Attempt).where(Attempt.job_id == job_id))
+            session.execute(sa_delete(StageRecord).where(StageRecord.job_id == job_id))
+            session.delete(row)
+        return True
 
     def claim(self):
         with Session(self.engine) as session:
