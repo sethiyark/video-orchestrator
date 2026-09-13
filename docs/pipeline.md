@@ -32,9 +32,16 @@ alignment, similarity (cosine vs prior completed similarity JSON), metadata.
 
 Critique: `governor.critique_rounds` rounds; each round is one batch of five
 critics (`CRITICS`, seeds `42+i`, `governor.critic_temperature`), aggregated
-by the **minimum** score; any `required_changes` blocks. The rewrite prompt
-receives the draft, the verified claims, and only the critics'
-`required_changes`.
+by the **minimum** score; any `required_changes` blocks. Critics and the
+rewrite see only the draft's `text` and `claim_ids` (`script_body`), never its
+provenance/artifact fields. The rewrite prompt receives the draft, the
+verified claims, and only the critics' `required_changes`.
+
+Script length: `check_script_length` runs on the script stage and on every
+critique rewrite. A script with fewer than
+`outline seconds × WORDS_PER_SECOND (2.5) × MIN_SCRIPT_COVERAGE (0.25)` words
+raises `ReviewRequired` as truncated or off-task, so a broken draft never
+reaches the critics. Skipped when there is no outline.
 
 Series jobs: outline, script, critique, storyboard, and metadata prompts
 receive the stage's slice of the job's `series_context` as a `series` data

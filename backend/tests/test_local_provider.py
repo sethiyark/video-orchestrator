@@ -1,4 +1,5 @@
 import asyncio
+import json
 from copy import deepcopy
 
 import pytest
@@ -287,3 +288,46 @@ def test_scene_schema_rejects_arbitrary_code_and_live_render_is_explicit(tmp_pat
     provider, _, job = setup(tmp_path, [])
     with pytest.raises(IntegrationUnavailable, match="not connected"):
         asyncio.run(provider.execute("render", job))
+
+
+def test_truncated_script_fails_closed_against_outline(tmp_path):
+    leak = {
+        "text": "DNS maps domain names to IP addresses quickly.",
+        "claim_ids": ["c1"],
+    }
+    provider, _, job = setup(tmp_path, [leak])
+    complete(job, "verification", {"verified_claims": [{"id": "c1", "text": "DNS"}]})
+    complete(
+        job,
+        "outline",
+        {
+            "sections": [
+                {
+                    "title": "DNS",
+                    "purpose": "x",
+                    "claim_ids": ["c1"],
+                    "estimated_seconds": 600,
+                }
+            ]
+        },
+    )
+    with pytest.raises(ReviewRequired, match="looks truncated"):
+        asyncio.run(provider.execute("script", job))
+
+
+def test_critics_receive_only_script_text_and_claims(tmp_path):
+    passing = {"score": 9, "issues": [], "required_changes": [], "optional_changes": []}
+    provider, runner, job = setup(tmp_path, [deepcopy(passing) for _ in range(5)])
+    complete(
+        job,
+        "script",
+        {
+            "text": "Draft narration.",
+            "claim_ids": ["c1"],
+            "provenance": {"x": 1},
+            "artifact": {},
+        },
+    )
+    asyncio.run(provider.execute("critique", job))
+    data = json.loads(runner.calls[0][1]["requests"][0]["messages"][1]["content"])
+    assert data["script"] == {"text": "Draft narration.", "claim_ids": ["c1"]}

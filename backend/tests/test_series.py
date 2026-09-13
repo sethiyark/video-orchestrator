@@ -257,7 +257,7 @@ def test_local_prompts_receive_stage_specific_series_guidance(tmp_path):
         "title": "DNS",
         "purpose": "Explain",
         "claim_ids": ["c1"],
-        "estimated_seconds": 30,
+        "estimated_seconds": 10,
     }
     script = {
         "text": "DNS maps names to addresses for every lookup you make.",

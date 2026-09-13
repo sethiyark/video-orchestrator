@@ -24,6 +24,12 @@ from .series.store import SeriesNotFound
 
 CRITICS = ("accuracy", "retention", "clarity", "originality", "style")
 
+# Narration pace used for the script length floor.
+WORDS_PER_SECOND = 2.5
+# A script shorter than this share of its outline's estimated runtime is a
+# truncated or off-task generation, not a concise explainer.
+MIN_SCRIPT_COVERAGE = 0.25
+
 # Which parts of a job's series snapshot each prompt receives.
 SERIES_SECTIONS = {
     "outline": ("voice", "glossary"),
@@ -89,6 +95,11 @@ def image_prompt(job, scene):
     style = style.get("image_style", "")
     prompt = scene["props"]["prompt"]
     return f"{prompt}. Style: {style}" if style else prompt
+
+
+def script_body(script):
+    """The narration fields a prompt needs, without provenance/artifact noise."""
+    return {"text": script["text"], "claim_ids": script["claim_ids"]}
 
 
 def current_script(job):
@@ -220,6 +231,20 @@ class LocalProvider:
                 "Model referenced claims outside the verified evidence"
             )
 
+    def check_script_length(self, job, script):
+        seconds = sum(
+            section["estimated_seconds"]
+            for section in output_for(job, "outline").get("sections", [])
+        )
+        words = len(script["text"].split())
+        minimum = int(seconds * WORDS_PER_SECOND * MIN_SCRIPT_COVERAGE)
+        if seconds and words < minimum:
+            raise ReviewRequired(
+                f"Script has {words} words but the outline plans ~{int(seconds)} seconds "
+                f"(at least {minimum} words expected); the generation looks truncated "
+                "or off-task. Review the script or restart the job."
+            )
+
     async def execute(self, stage, job):
         result = await self._execute(stage, job)
         result["provider"] = "local"
@@ -316,6 +341,7 @@ class LocalProvider:
                 Script,
             )
             self.check_claim_ids(result, verified)
+            self.check_script_length(job, result)
             return result
         if stage == "critique":
             draft = output_for(job, "script")
@@ -338,7 +364,10 @@ class LocalProvider:
                                     if name == "style" and series_guidance(job, stage)
                                     else ""
                                 ),
-                                {"script": draft, "verified_claims": verified},
+                                {
+                                    "script": script_body(draft),
+                                    "verified_claims": verified,
+                                },
                             ),
                             Critic,
                             {
@@ -368,7 +397,7 @@ class LocalProvider:
                             "script",
                             "Revise the narration to address every required change. Use only the verified claims. Return the revised text and used claim ids.",
                             {
-                                "draft": draft,
+                                "draft": script_body(draft),
                                 "required_changes": {
                                     name: critic["required_changes"]
                                     for name, critic in critics.items()
@@ -380,6 +409,7 @@ class LocalProvider:
                         Script,
                     )
                     self.check_claim_ids(draft, verified)
+                    self.check_script_length(job, draft)
             artifact = self.artifacts.put_json(
                 job["id"], {"rounds": rounds, "last_draft": draft}
             )
@@ -562,7 +592,7 @@ class LocalProvider:
                     job,
                     stage,
                     "Create a factual title, description and tags based on the approved script. No unsupported promises or claims.",
-                    current_script(job),
+                    script_body(current_script(job)),
                 ),
                 Metadata,
             )
