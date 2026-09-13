@@ -6,7 +6,7 @@ The dashboard supports drafts, pipeline progress, stage outputs, model readiness
 
 ## Start locally
 
-Requirements: Node.js 22.12+ (`nvm use`), Python 3.12+, and [uv](https://docs.astral.sh/uv/).
+Requirements: Node.js 22.12+ (`nvm use`), [Corepack](https://nodejs.org/api/corepack.html) (ships with Node) for **pnpm**, Python 3.12+, and [uv](https://docs.astral.sh/uv/).
 
 From the repository root, install once and run both servers:
 
@@ -58,14 +58,23 @@ Hugging Face supplies **model weights**. Inference runs locally; no hosted infer
 
 Edit `backend/config/models.yaml` to change repositories, revisions, download patterns, device settings, context size, output limits, priorities, voice, speed, and stage routing without editing agent code. `MODEL_CONFIG` can point to another YAML file.
 
-Configured roles:
+Configured roles (defaults in `models.yaml`):
 
-- **fast:** SmolLM3 3B Q4 GGUF for evidence extraction and metadata.
+- **fast:** Qwen3 4B Q4 GGUF for evidence extraction and metadata.
 - **quality:** Qwen3 8B Q4 GGUF for verification, outlines, scripts, independent critics, and storyboards.
-- **narration:** Kokoro-82M for sentence-chunked WAV narration.
-- **alignment:** faster-whisper small for segment and word timestamps.
-- **embeddings:** all-MiniLM-L6-v2 on CPU for comparison with previous scripts.
-- **images:** optional SDXL with FP16, CPU offload, VAE slicing and tiling. Disabled by default.
+- **narration:** Kokoro-82M for sentence-chunked WAV narration. The CUDA profile uses Qwen3-TTS 0.6B (preset English speaker).
+- **alignment:** faster-whisper large-v3-turbo (int8, CPU) for timestamps plus a script-vs-transcript fidelity score. The CUDA profile uses a CTC forced aligner on the known script instead.
+- **embeddings:** Qwen3-Embedding-0.6B on CPU for comparison with previous scripts.
+- **images:** optional FLUX.1-schnell GGUF (Q4_K_S transformer + GGUF T5 encoder, CPU offload, 4 steps). CUDA only; disabled by default.
+
+Hardware profiles are selected with `MODEL_CONFIG` and are sized for 16 GB RAM with an 8 GB GPU or an Apple Silicon laptop:
+
+```sh
+make dev-local-mac    # MODEL_CONFIG=config/models.mac.yaml   (Metal, images off)
+make dev-local-cuda   # MODEL_CONFIG=config/models.cuda-8gb.yaml (CUDA, images on)
+```
+
+Only one model is resident at a time, so peak memory is the quality GGUF plus its KV cache (about 7 GB at the CUDA profile's 12k context). Each critique round loads the model once for all five critics.
 
 The API remains lightweight; each inference subprocess imports only its required runtime. From `backend`, install the optional dependency groups you need:
 
@@ -73,13 +82,19 @@ The API remains lightweight; each inference subprocess imports only its required
 uv sync --extra llm --extra audio --extra embeddings
 ```
 
-`llama-cpp-python` may compile native code. Its default build is CPU-only. On the intended NVIDIA Linux host, install the CUDA toolkit/compiler and build with CUDA enabled:
+`llama-cpp-python` (pinned `>=0.3.35`, which bundles Qwen3.5 support) may compile native code. Its default build is CPU-only. On the intended NVIDIA Linux host, install the CUDA toolkit/compiler and build with CUDA enabled:
 
 ```sh
 CMAKE_ARGS='-DGGML_CUDA=on' uv sync --extra llm --extra audio --extra embeddings --reinstall-package llama-cpp-python --no-binary-package llama-cpp-python
 ```
 
-Then set `device: cuda` and `gpu_layers: -1` for the fast/quality roles. The default YAML uses CPU to remain portable. Leave embeddings on CPU; Kokoro and Whisper also default to CPU. VRAM fit and speed must be measured on the actual GPU; reduce context size or GPU layers if needed.
+Then set `device: cuda` and `gpu_layers: -1` for the fast/quality roles (already done in `models.cuda-8gb.yaml`). On Apple Silicon install the Metal wheel and use `models.mac.yaml` (`device: metal`):
+
+```sh
+uv pip install --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/metal llama-cpp-python --reinstall
+```
+
+The default YAML uses CPU to remain portable. Leave embeddings on CPU; Whisper and the CTC aligner run on CPU or CUDA. VRAM fit and speed must be measured on the actual GPU; reduce context size or GPU layers if needed.
 
 Kokoro's English phonemizer also needs the spaCy English package and `espeak-ng`. Install `espeak-ng` through your OS package manager, then:
 
@@ -113,7 +128,7 @@ Start real local inference:
 PIPELINE_MODE=local .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8091
 ```
 
-For optional images, install `uv sync --extra llm --extra audio --extra embeddings --extra images`, set `images_enabled: true`, and prepare `images`. Images use the same exclusive inference queue. The current implementation uses Diffusers directly; ComfyUI is not connected.
+For optional images, install `uv sync --extra llm --extra audio --extra embeddings --extra images`, set `images_enabled: true` (the CUDA profile does), and prepare `images`; the download pins the transformer GGUF, the GGUF T5 encoder, and the FLUX.1-schnell base files in one manifest. Images use the same exclusive inference queue and require CUDA. Measure RAM on the host during CPU offload; switch the transformer file to Q3_K_S if 16 GB is short. The current implementation uses Diffusers directly; ComfyUI is not connected.
 
 ## Pipeline and evidence
 
@@ -127,9 +142,9 @@ research → verification → outline → script → critique → storyboard
 
 Local jobs require source URLs and excerpts. The UI accepts one source; the API accepts up to ten. Source URLs are recorded but **not fetched**. Research extracts claims with exact quotations checked against those excerpts. A separate model verifies each claim; only claims meeting the configured confidence threshold reach the outline and writer. This is model assessment of supplied evidence, not independent web fact-checking.
 
-Accuracy, retention, clarity, originality, and style critics use separate prompts. The minimum critic score and unresolved required changes determine acceptance. Revision loops are bounded by the governor. Corpus similarity uses normalized embeddings from the same model configuration and revision; it currently compares against all prior jobs with completed similarity outputs, not only published videos.
+Accuracy, retention, clarity, originality, and style critics use separate prompts and seeds but share one model load per round. The minimum critic score and unresolved required changes determine acceptance; rewrites see only the required changes. Revision loops are bounded by `critique_rounds`. Inputs that cannot fit the model context stop with a review message before any model runs. Corpus similarity uses normalized embeddings from the same model configuration and revision; it currently compares against all prior jobs with completed similarity outputs, not only published videos.
 
-Storyboards accept a closed JSON schema: `DefinitionCard`, `AnimatedFlowDiagram`, `BulletReveal`, and optional `ImagePan`. They cannot contain arbitrary renderer code. Kokoro produces a concatenated WAV with chunk boundaries; Whisper produces segment and word timestamps. Final scene retiming remains a renderer integration task.
+Storyboards accept a closed JSON schema: `DefinitionCard`, `AnimatedFlowDiagram`, `BulletReveal`, and optional `ImagePan`. They cannot contain arbitrary renderer code. Kokoro (or Qwen3-TTS) produces a concatenated WAV with chunk boundaries; alignment produces segment and word timestamps plus a fidelity score against the script, and stops the job for review when the audio does not match the narration. Final scene retiming remains a renderer integration task.
 
 Stage JSON and media are saved under `ARTIFACT_DIR` (default `backend/data/artifacts`) with content hashes and model provenance. Inspect stage JSON and download narration in the dashboard. API endpoints include:
 
@@ -179,8 +194,8 @@ For PostgreSQL integration testing, set `TEST_DATABASE_URL` to a **disposable** 
 
 ```sh
 cd frontend
-npm run build
-npm run typecheck
+pnpm build
+pnpm typecheck
 ```
 
 Tests use controlled model responses and fake runtime processes; they do not download or execute multi-GB models. Actual model quality, native dependency compatibility, and GPU behavior need validation on the target machine.

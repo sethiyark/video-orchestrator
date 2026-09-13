@@ -22,7 +22,7 @@ Claude Code loads this file via `@AGENTS.md` in `CLAUDE.md` — keep that pointe
 ## Stack
 
 - **Backend: Python >= 3.12**, managed with **uv**. FastAPI, SQLAlchemy 2, Alembic. Package layout: [`backend/`](backend/).
-- **Frontend: React + TypeScript + Vite**, TanStack Start / Router / Query. **npm** (`frontend/package.json`). Node >= 22.12.
+- **Frontend: React + TypeScript + Vite**, TanStack Start / Router / Query. **pnpm** via Corepack (`frontend/package.json` `packageManager`). Node >= 22.12.
 - **Persistence:** SQLite at `backend/data/jobs.sqlite3` by default (`DATABASE_PATH` / `DATABASE_URL`). Optional PostgreSQL via Compose.
 - **Localhost development.** No dashboard auth yet. Bind the API and UI to loopback.
 
@@ -39,10 +39,12 @@ uv run ruff check app tests migrations
 uv run python -m app.database
 
 cd frontend
-npm ci
-npm run dev          # :3091
-npm run typecheck
-npm run build
+corepack enable
+corepack prepare
+pnpm install --frozen-lockfile
+pnpm dev             # :3091
+pnpm typecheck
+pnpm build
 ```
 
 Default pipeline is **mock**. Local inference:
@@ -82,7 +84,7 @@ Rules for any agent (Cursor, Codex, Claude Code) working in this repo.
 
 - Match the surrounding style. Type hints on public functions; PEP 604 unions.
 - Logging via `log = logging.getLogger(__name__)`.
-- New Python dependencies go through uv / [`backend/pyproject.toml`](backend/pyproject.toml). Frontend dependencies go through npm.
+- New Python dependencies go through uv / [`backend/pyproject.toml`](backend/pyproject.toml). Frontend dependencies go through pnpm (`frontend/package.json`).
 
 **Tests**
 
@@ -92,7 +94,7 @@ Rules for any agent (Cursor, Codex, Claude Code) working in this repo.
 **Verifying**
 
 - Backend: `uv run pytest` and `uv run ruff check app tests migrations` from `backend/`.
-- Frontend: `npm run typecheck` / `npm run build`, and verify UI in a browser end to end when you change it.
+- Frontend: `pnpm typecheck` / `pnpm build`, and verify UI in a browser end to end when you change it.
 - Report the result honestly, including what you did not run.
 
 **Safety**

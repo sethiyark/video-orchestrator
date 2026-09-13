@@ -21,11 +21,11 @@ when health `provider === "local"`). Actions POST `/jobs/{id}/run` and
 
 `ModelPanel` consumes `/api/models`.
 
-Vite: `127.0.0.1:3091`. npm scripts: `dev`, `build`, `typecheck`, `format`.
+Vite: `127.0.0.1:3091`. pnpm (Corepack) scripts: `dev`, `build`, `typecheck`, `format`.
 
 ## How it is called
 
-From the repo root, `make dev` starts the API (`uv run uvicorn` on `127.0.0.1:8091`) and `npm run dev` together. `make dev-ui` (alias `make dashboard`) runs only the dashboard. CORS must include the Vite origin.
+From the repo root, `make dev` starts the API (`uv run uvicorn` on `127.0.0.1:8091`) and `pnpm dev` together. `make dev-ui` (alias `make dashboard`) runs only the dashboard. CORS must include the Vite origin. Install with Corepack: `corepack enable && corepack prepare`, then `pnpm install --frozen-lockfile` in `frontend/`.
 
 ## Invariants
 

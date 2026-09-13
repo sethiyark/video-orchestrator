@@ -15,7 +15,7 @@
       "runtimeExecutable": "zsh",
       "runtimeArgs": [
         "-lc",
-        "source ~/.nvm/nvm.sh && nvm use >/dev/null; cd frontend && npm run dev"
+        "source ~/.nvm/nvm.sh && nvm use >/dev/null; corepack enable; cd frontend && pnpm dev"
       ],
       "port": 3091
     }
