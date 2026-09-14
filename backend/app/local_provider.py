@@ -147,7 +147,21 @@ def locate_quote(quote, excerpt):
     if start < 0:
         return None
     first, last = pairs[start][1], pairs[start + len(wanted) - 1][1]
+    # Keep the excerpt's own punctuation at either end when the quote had some.
+    stripped = quote.strip()
+    while not stripped[0].isalnum() and first and is_mark(excerpt[first - 1]):
+        first -= 1
+    while (
+        not stripped[-1].isalnum()
+        and last + 1 < len(excerpt)
+        and is_mark(excerpt[last + 1])
+    ):
+        last += 1
     return excerpt[first : last + 1]
+
+
+def is_mark(char):
+    return not char.isalnum() and not char.isspace()
 
 
 def script_body(script):
