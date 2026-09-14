@@ -1272,3 +1272,114 @@ pre {
   display: inline-flex;
   align-items: baseline;
 }
+
+/* Image relay (assets stage routed to "manual") */
+.image-relay {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.image-relay .relay-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.image-relay .relay-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.relay-list {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.relay-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px 14px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid #dfe3d8;
+  border-radius: 8px;
+  background: #fbfcf9;
+}
+.relay-item.done {
+  opacity: 0.6;
+}
+.relay-item code {
+  font-size: 11px;
+}
+.relay-item .prompt {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  color: #4d5a4a;
+}
+.relay-item img {
+  width: 96px;
+  height: 54px;
+  object-fit: cover;
+  border-radius: 4px;
+}
+/* Storyboard chapters and image thumbnails */
+.chapters {
+  display: grid;
+  gap: 10px;
+  margin: 8px 0 12px;
+}
+.chapter-card {
+  border-left: 3px solid #409b76;
+  padding: 8px 12px;
+  background: #f7f9f3;
+  border-radius: 0 8px 8px 0;
+}
+.chapter-card strong {
+  display: block;
+}
+.chapter-card small {
+  color: #5c6a5a;
+}
+.scene-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 12px;
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+}
+.scene-list li span.component {
+  display: inline-block;
+  min-width: 150px;
+  font-weight: 600;
+}
+.thumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.thumbs figure {
+  margin: 0;
+  width: 160px;
+  font-size: 11px;
+}
+.thumbs img {
+  width: 160px;
+  height: 90px;
+  object-fit: cover;
+  border-radius: 6px;
+  display: block;
+}
+.render-options {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 6px 0 12px;
+  font-size: 13px;
+}
+.render-options select {
+  max-width: 260px;
+}

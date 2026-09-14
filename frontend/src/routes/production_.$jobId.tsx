@@ -24,6 +24,12 @@ import {
   type SeriesAsset,
 } from "../lib/api";
 import { label, needsRestart } from "../lib/format";
+import { ImageRelayPanel } from "../components/ImageRelayPanel";
+import {
+  ImageThumbs,
+  RenderOptionsPanel,
+  StoryboardSummary,
+} from "../components/StageExtras";
 
 export const Route = createFileRoute("/production_/$jobId")({
   component: ProductionDetail,
@@ -228,10 +234,15 @@ function ProductionDetail() {
               )}
               {current.status === "awaiting_manual_input" && (
                 <div className="review-note">
-                  Paste the prompt below into your Claude Pro or Gemini Pro
-                  chat, then paste the reply back to continue.
+                  {current.stages.some(
+                    (stage) =>
+                      stage.name === "assets" && stage.status === "awaiting_input",
+                  )
+                    ? "Generate the listed images in your Claude Pro or Gemini Pro chat and upload them below to continue."
+                    : "Paste the prompt below into your Claude Pro or Gemini Pro chat, then paste the reply back to continue."}
                 </div>
               )}
+              <RenderOptionsPanel job={current} />
               {(current.error ||
                 action.error ||
                 deleteJob.error ||
@@ -287,7 +298,17 @@ function ProductionDetail() {
                         {stage.status}
                       </span>
                     </summary>
-                    {stage.status === "awaiting_input" ? (
+                    {stage.status === "awaiting_input" &&
+                    stage.name === "assets" &&
+                    (stage.output as ManualStageOutput | null)?.manual
+                      ?.expected_images ? (
+                      <ImageRelayPanel
+                        jobId={current.id}
+                        manual={
+                          (stage.output as ManualStageOutput).manual!
+                        }
+                      />
+                    ) : stage.status === "awaiting_input" ? (
                       <div className="manual-step">
                         <p className="muted">
                           Round {Object.keys(
@@ -343,6 +364,30 @@ function ProductionDetail() {
                       </div>
                     ) : stage.output ? (
                       <div>
+                        {stage.name === "storyboard" && (
+                          <StoryboardSummary output={stage.output} />
+                        )}
+                        {stage.name === "assets" &&
+                          Array.isArray(stage.output.images) && (
+                            <ImageThumbs
+                              jobId={current.id}
+                              images={stage.output.images as never[]}
+                            />
+                          )}
+                        {stage.name === "render" &&
+                          typeof stage.output.video === "object" &&
+                          stage.output.video &&
+                          "id" in stage.output.video && (
+                            <a
+                              className="artifact-link"
+                              href={artifactUrl(
+                                current.id,
+                                String(stage.output.video.id),
+                              )}
+                            >
+                              Download rendered MP4
+                            </a>
+                          )}
                         <pre>{JSON.stringify(stage.output, null, 2)}</pre>
                         {typeof stage.output.artifact === "object" &&
                           stage.output.artifact &&

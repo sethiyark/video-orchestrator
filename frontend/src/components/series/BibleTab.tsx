@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, apiSend, type BibleVersion } from "../../lib/api";
+import { api, apiSend, type BibleVersion, type SeriesAsset } from "../../lib/api";
 import { BibleFields, fromDraft, useBibleDraft } from "./BibleFields";
 
 export function BibleTab({ seriesId }: { seriesId: string }) {
@@ -33,6 +33,10 @@ function BibleEditor({
 }) {
   const client = useQueryClient();
   const [draft, setDraft] = useBibleDraft(bible.document);
+  const assets = useQuery({
+    queryKey: ["series", seriesId, "assets", false],
+    queryFn: () => api<SeriesAsset[]>(`/series/${seriesId}/assets`),
+  });
   const save = useMutation({
     mutationFn: () =>
       apiSend<BibleVersion>(
@@ -70,7 +74,12 @@ function BibleEditor({
         New videos snapshot the bible when they are created. Saving a change
         marks existing videos in this series as needing a restart.
       </p>
-      <BibleFields draft={draft} onChange={setDraft} idPrefix="bible" />
+      <BibleFields
+        draft={draft}
+        onChange={setDraft}
+        idPrefix="bible"
+        assets={assets.data ?? []}
+      />
       {save.error && (
         <p role="alert" className="error">
           {save.error.message}

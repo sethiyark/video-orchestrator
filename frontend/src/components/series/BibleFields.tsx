@@ -1,13 +1,20 @@
 import { useState } from "react";
-import type { ComponentName, SeriesBible } from "../../lib/api";
+import {
+  COMPONENT_NAMES,
+  type ComponentName,
+  type SeriesAsset,
+  type SeriesBible,
+} from "../../lib/api";
 
-const COMPONENTS: ComponentName[] = [
-  "DefinitionCard",
-  "AnimatedFlowDiagram",
-  "BulletReveal",
-  "ImagePan",
-  "SeriesAsset",
+const COMPONENTS: readonly ComponentName[] = COMPONENT_NAMES;
+/** Brand-kit slots → the library asset kinds they accept. */
+const BRAND_SLOTS: { key: BrandKey; label: string; kinds: string[] }[] = [
+  { key: "logoAssetId", label: "Logo", kinds: ["logo", "image"] },
+  { key: "introAssetId", label: "Intro plate", kinds: ["logo", "image"] },
+  { key: "outroAssetId", label: "Outro plate", kinds: ["logo", "image"] },
+  { key: "musicAssetId", label: "Music bed", kinds: ["music", "audio"] },
 ];
+type BrandKey = "logoAssetId" | "introAssetId" | "outroAssetId" | "musicAssetId";
 
 const lines = (text: string) =>
   text
@@ -23,6 +30,10 @@ export type BibleDraft = {
   palette: string;
   components: ComponentName[];
   imageStyle: string;
+  logoAssetId: string;
+  introAssetId: string;
+  outroAssetId: string;
+  musicAssetId: string;
   glossary: string;
 };
 
@@ -34,6 +45,10 @@ export const toDraft = (bible: SeriesBible): BibleDraft => ({
   palette: bible.visual.palette.join(", "),
   components: bible.visual.preferred_components,
   imageStyle: bible.visual.image_style,
+  logoAssetId: bible.visual.logo_asset_id ?? "",
+  introAssetId: bible.visual.intro_asset_id ?? "",
+  outroAssetId: bible.visual.outro_asset_id ?? "",
+  musicAssetId: bible.visual.music_asset_id ?? "",
   glossary: bible.glossary
     .map((entry) => `${entry.term}: ${entry.definition}`)
     .join("\n"),
@@ -53,6 +68,10 @@ export const fromDraft = (draft: BibleDraft): SeriesBible => ({
       .filter(Boolean),
     preferred_components: draft.components,
     image_style: draft.imageStyle.trim(),
+    logo_asset_id: draft.logoAssetId || null,
+    intro_asset_id: draft.introAssetId || null,
+    outro_asset_id: draft.outroAssetId || null,
+    music_asset_id: draft.musicAssetId || null,
   },
   glossary: lines(draft.glossary).map((line) => {
     const split = line.indexOf(":");
@@ -74,10 +93,13 @@ export function BibleFields({
   draft,
   onChange,
   idPrefix,
+  assets,
 }: {
   draft: BibleDraft;
   onChange: (draft: BibleDraft) => void;
   idPrefix: string;
+  /** Active series library assets for the brand-kit pickers; omit to hide them. */
+  assets?: SeriesAsset[];
 }) {
   const set = <K extends keyof BibleDraft>(key: K, value: BibleDraft[K]) =>
     onChange({ ...draft, [key]: value });
@@ -173,6 +195,37 @@ export function BibleFields({
           placeholder="Flat vector, muted greens, no text"
         />
       </fieldset>
+      {assets && (
+        <fieldset className="bible-group">
+          <legend>Brand kit</legend>
+          <p className="muted">
+            Library assets every video in this series reuses: a logo watermark,
+            intro and outro plates, and a music bed ducked under narration.
+          </p>
+          {BRAND_SLOTS.map((slot) => {
+            const options = assets.filter(
+              (asset) => asset.status === "active" && slot.kinds.includes(asset.kind),
+            );
+            return (
+              <div key={slot.key}>
+                <label htmlFor={id(slot.key)}>{slot.label}</label>
+                <select
+                  id={id(slot.key)}
+                  value={draft[slot.key]}
+                  onChange={(e) => set(slot.key, e.target.value)}
+                >
+                  <option value="">None</option>
+                  {options.map((asset) => (
+                    <option key={asset.id} value={asset.id}>
+                      {asset.name || asset.id} · {asset.kind}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            );
+          })}
+        </fieldset>
+      )}
       <fieldset className="bible-group">
         <legend>Glossary</legend>
         <label htmlFor={id("glossary")}>

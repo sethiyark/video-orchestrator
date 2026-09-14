@@ -1,6 +1,12 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { api, type Job, type Series, type Theme } from "../lib/api";
+import {
+  api,
+  type Job,
+  type Series,
+  type SeriesAsset,
+  type Theme,
+} from "../lib/api";
 import { LibrarySourcePicker } from "./series/LibrarySourcePicker";
 
 export function NewVideoModal({
@@ -21,7 +27,17 @@ export function NewVideoModal({
   const [seriesId, setSeriesId] = useState(defaultSeriesId);
   const [themeId, setThemeId] = useState("");
   const [librarySourceIds, setLibrarySourceIds] = useState<string[]>([]);
+  const [captions, setCaptions] = useState(true);
+  const [musicAssetId, setMusicAssetId] = useState("");
   const needsSource = isLocal && librarySourceIds.length === 0;
+  const assets = useQuery({
+    queryKey: ["series", seriesId, "assets", false],
+    queryFn: () => api<SeriesAsset[]>(`/series/${seriesId}/assets`),
+    enabled: !!seriesId,
+  });
+  const music = (assets.data ?? []).filter(
+    (asset) => asset.status === "active" && ["music", "audio"].includes(asset.kind),
+  );
   const series = useQuery({
     queryKey: ["series"],
     queryFn: () => api<Series[]>("/series"),
@@ -39,6 +55,10 @@ export function NewVideoModal({
         series_id: seriesId || null,
         theme_id: (seriesId && themeId) || null,
         library_source_ids: seriesId ? librarySourceIds : [],
+        render: {
+          captions,
+          music_asset_id: (seriesId && musicAssetId) || null,
+        },
         sources: sourceUrl
           ? [
               {
@@ -102,6 +122,7 @@ export function NewVideoModal({
                   setSeriesId(e.target.value);
                   setThemeId("");
                   setLibrarySourceIds([]);
+                  setMusicAssetId("");
                 }}
               >
                 <option value="">Standalone video</option>
@@ -165,6 +186,34 @@ export function NewVideoModal({
             Local research uses the supplied excerpt. It does not fetch the
             URL. More sources can be supplied through the API.
           </p>
+          <div className="field-label">Render options</div>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={captions}
+              onChange={(e) => setCaptions(e.target.checked)}
+            />
+            Word-highlight captions
+          </label>
+          {seriesId && music.length > 0 && (
+            <>
+              <label htmlFor="music">
+                Music bed <span>(optional, from the series library)</span>
+              </label>
+              <select
+                id="music"
+                value={musicAssetId}
+                onChange={(e) => setMusicAssetId(e.target.value)}
+              >
+                <option value="">Series default</option>
+                {music.map((asset) => (
+                  <option key={asset.id} value={asset.id}>
+                    {asset.name || asset.id}
+                  </option>
+                ))}
+              </select>
+            </>
+          )}
           <p className="muted">
             Starts as a draft. Run the pipeline when you're ready.
           </p>

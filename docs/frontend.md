@@ -11,6 +11,8 @@ Sources: [`frontend/src/routes/index.tsx`](../frontend/src/routes/index.tsx),
 [`frontend/src/components/NewVideoModal.tsx`](../frontend/src/components/NewVideoModal.tsx),
 [`frontend/src/components/ModelPanel.tsx`](../frontend/src/components/ModelPanel.tsx),
 [`frontend/src/components/ModelConfigModal.tsx`](../frontend/src/components/ModelConfigModal.tsx),
+[`frontend/src/components/ImageRelayPanel.tsx`](../frontend/src/components/ImageRelayPanel.tsx),
+[`frontend/src/components/StageExtras.tsx`](../frontend/src/components/StageExtras.tsx),
 [`frontend/src/routes/series.tsx`](../frontend/src/routes/series.tsx),
 [`frontend/src/routes/series_.$seriesId.tsx`](../frontend/src/routes/series_.$seriesId.tsx),
 [`frontend/src/components/series/`](../frontend/src/components/series),
@@ -50,8 +52,12 @@ Eight TanStack Router file routes:
   preset to the series) and "Delete series" (surfaces the 409 when videos
   still use it), plus tabs:
   **Bible** (`BibleTab` + `BibleFields`: voice, palette swatches, preferred
-  components, image style, glossary as `Term: definition` lines; "Save new
-  version" PUTs and invalidates `["jobs"]`), **Themes** (`ThemesTab`: cards
+  components (the full fourteen-name enum from `COMPONENT_NAMES`), image
+  style, a brand kit — logo, intro plate, outro plate, music bed — picked
+  from the series' active library assets (`BibleTab` fetches
+  `/series/{id}/assets` and passes `assets`; `ThemesTab` omits them so the
+  pickers stay hidden there), glossary as `Term: definition` lines; "Save
+  new version" PUTs and invalidates `["jobs"]`), **Themes** (`ThemesTab`: cards
   and a modal with name, blurb, and the same guidance fields), **Ideas**
   (`IdeasTab`: backlog cards with Start video / Drop / Restore / Delete; the
   start modal takes library sources and an optional URL + excerpt, required
@@ -82,19 +88,30 @@ Eight TanStack Router file routes:
 Create form (`NewVideoModal`, used on `/`, `/production`, and the series
 page): title, brief, optional series and theme selects (shown when series
 exist), library-source checkboxes (`LibrarySourcePicker`) for the chosen
-series, and an optional source URL+excerpt (required in the UI when health
-`provider === "local"` and no library source is selected).
+series, an optional source URL+excerpt (required in the UI when health
+`provider === "local"` and no library source is selected), and render options
+(word-highlight captions checkbox; a music bed select listing the series'
+active music/audio assets), sent as `render`.
 
 Job detail shows a series badge (series · theme · bible version, linking to
-the series) and, when `series_stale`, a warning banner; `needsRestart`
+the series), a `RenderOptionsPanel` (`StageExtras.tsx`: captions toggle and
+music select that PATCH `/jobs/{id}/render` via `updateRenderOptions`, locked
+once the job is queued/running or the render stage completed), a
+`StoryboardSummary` on the storyboard stage (chapter cards, then every
+scene's id, component, title and image prompt), `ImageThumbs` on the assets
+stage (thumbnails via `artifactUrl` with their `cache` origin, plus a note
+for scenes that reuse the chapter hero), a "Download rendered MP4" link on
+the render stage, and, when `series_stale`, a warning banner; `needsRestart`
 (`lib/format.ts`) makes Restart the primary action for stale config or series.
 For series jobs, narration WAV and generated images get a "Promote to series"
 button (name via `window.prompt`) that POSTs
 `/jobs/{id}/artifacts/{artifact_id}/promote` and shows the result inline.
 
-`lib/api.ts` adds series types, `apiSend` (PUT/PATCH JSON), `apiUpload` (raw
-file body), `assetUrl`, and flattens FastAPI validation errors into
-`field: message` strings. Actions POST `/jobs/{id}/run`, `/restart` (clears
+`lib/api.ts` adds series types, `COMPONENT_NAMES`, `RenderOptions`,
+`Chapter`/`StoryboardScene`, the relay fields on `ManualStageOutput`,
+`uploadManualImage`, `skipManualImages`, `updateRenderOptions`, `apiSend`
+(PUT/PATCH JSON), `apiUpload` (raw file body), `assetUrl`, and flattens
+FastAPI validation errors into `field: message` strings. Actions POST `/jobs/{id}/run`, `/restart` (clears
 stages and rebases `config_hash`), `/approve`, and (via `submitManualResponse`,
 typed by `ManualStageOutput`) `/jobs/{id}/stages/{stage}/manual-response`.
 Narration download via `artifactUrl`. A job with `config_changes` shows a note that the pipeline
@@ -102,7 +119,17 @@ continues on the current models and which pending stages the latest change
 affects; a job with `corrections` shows which stage sent it back and why.
 `configChanged` (`lib/format.ts`) still matches legacy error text.
 
-Manual stage input: when a stage is `awaiting_input` (job
+Image relay: when the **assets** stage is `awaiting_input` with
+`output.manual.expected_images`, its panel is `ImageRelayPanel` instead: the
+missing count, "Copy prompt list" (the composed prompt document), a "Use
+chapter heroes for N remaining scenes" button (`skipManualImages` → `POST
+.../manual-images/skip`), and one row per expected image with its id, kind,
+prompt, an upload control (`uploadManualImage`, raw-body `POST
+.../manual-images/{id}`, png/jpeg/webp) or the uploaded thumbnail. Errors
+from the API render inline; the job is invalidated after each call and
+resumes on its own once nothing is missing.
+
+Manual stage input: when any other stage is `awaiting_input` (job
 `awaiting_manual_input` — a stage routed to `"manual"` in
 [pipeline.md](../docs/pipeline.md#manual-routing-human-relay)), its
 `<details>` panel shows the pasted-response round number, the composed
