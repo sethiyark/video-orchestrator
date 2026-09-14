@@ -43,22 +43,8 @@ MIN_SCRIPT_COVERAGE = 0.25
 SCRIPT_RETRY_ROUNDS = 1
 # Extra batches that re-ask only the sources whose quotes could not be located.
 RESEARCH_RETRY_ROUNDS = 1
-# Punctuation a model flattens when copying a quote; not evidence of fabrication.
-QUOTE_EQUIVALENTS = str.maketrans(
-    {
-        "\u2018": "'",
-        "\u2019": "'",
-        "\u201a": "'",
-        "\u201c": '"',
-        "\u201d": '"',
-        "\u201e": '"',
-        "\u2013": "-",
-        "\u2014": "-",
-        "\u2212": "-",
-        "\u00a0": " ",
-        "\u2026": "...",
-    }
-)
+# Dash-like characters count as word breaks when locating quotes.
+QUOTE_BREAKS = "-\u2010\u2011\u2012\u2013\u2014\u2015\u2212/"
 
 # Which parts of a job's series snapshot each prompt receives.
 SERIES_SECTIONS = {
@@ -132,18 +118,18 @@ def sentences(text):
 
 
 def normalized_chars(text):
-    """(normalized character, index in ``text``) pairs: quotes and dashes
-    flattened, case folded, whitespace collapsed and dropped around dashes."""
+    """(normalized character, index in ``text``) pairs for word-level matching:
+    letters and digits case-folded, dashes and whitespace collapsed to one
+    space, all other punctuation dropped."""
     pairs = []
     for index, char in enumerate(text):
-        for out in unicodedata.normalize("NFKC", char).translate(QUOTE_EQUIVALENTS):
-            if out.isspace():
-                if pairs and pairs[-1][0] in (" ", "-"):
-                    continue
-                out = " "
-            elif out == "-" and pairs and pairs[-1][0] == " ":
-                pairs.pop()
-            pairs.append((out.casefold(), index))
+        for out in unicodedata.normalize("NFKC", char):
+            if out.isalnum():
+                pairs.append((out.casefold(), index))
+            elif (out.isspace() or out in QUOTE_BREAKS) and (
+                pairs and pairs[-1][0] != " "
+            ):
+                pairs.append((" ", index))
     return pairs
 
 

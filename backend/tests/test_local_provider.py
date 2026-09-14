@@ -141,6 +141,11 @@ def test_research_quotes_tolerate_flattened_punctuation():
         )
         == "The study \u201cGrind size\u201d found\u00a0that finer\u2014not coarser\u2014grinds"
     )
+    # Quote marks and commas are not evidence; single vs double is ignored too.
+    assert (
+        locate_quote("the study 'Grind size' found that", excerpt)
+        == "The study \u201cGrind size\u201d found\u00a0that"
+    )
     assert locate_quote("finer grinds extract less", excerpt) is None
     assert locate_quote("   ", excerpt) is None
 
