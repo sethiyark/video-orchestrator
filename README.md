@@ -101,8 +101,13 @@ The default YAML uses CPU to remain portable. Leave embeddings on CPU; Whisper a
 Kokoro's English phonemizer also needs the spaCy English package and `espeak-ng`. Install `espeak-ng` through your OS package manager, then:
 
 ```sh
-.venv/bin/python -m spacy download en_core_web_sm
+uv pip install https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
 ```
+
+(`python -m spacy download` needs pip, which a uv-managed `.venv` does not
+ship; the wheel version must match the installed spaCy 3.8.x.) Without the
+package the narration stage fails with `OSError: [E050] Can't find model
+'en_core_web_sm'`.
 
 Prepare the configured model files explicitly, either with the **Download weights** and **Install runtime** buttons in the Model library panel (installs run `uv sync --extra …` in `backend/` and can take several minutes; progress is shown on the card) or from the shell:
 
