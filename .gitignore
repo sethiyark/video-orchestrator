@@ -224,5 +224,6 @@ dist/
 .tanstack/
 backend/data/
 .env.local
+.vite/
 
 .tmp/
