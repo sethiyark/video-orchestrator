@@ -98,9 +98,10 @@ uv pip install --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/
 
 The default YAML uses CPU to remain portable. Leave embeddings on CPU; Whisper and the CTC aligner run on CPU or CUDA. VRAM fit and speed must be measured on the actual GPU; reduce context size or GPU layers if needed.
 
-Kokoro's English phonemizer also needs `espeak-ng` (install it through your
-OS package manager, e.g. `brew install espeak-ng` or `apt install espeak-ng`)
-and the spaCy English package. The `audio` extra pins that package
+Kokoro's English phonemizer also needs `espeak-ng` and the spaCy English
+package. `make setup` (via `make system-deps`) installs `espeak-ng` with
+Homebrew when it is available; elsewhere install it with your OS package
+manager (e.g. `sudo apt install espeak-ng`). The `audio` extra pins that package
 (`en-core-web-sm` 3.8.0, a direct wheel URL since it is not on PyPI), so
 `uv sync --extra audio` installs it; if the narration stage fails with
 `OSError: [E050] Can't find model 'en_core_web_sm'`, re-run the sync.

@@ -1,9 +1,20 @@
-.PHONY: setup dev dev-api dev-ui dev-local-mac dev-local-cuda test worker dashboard lint format render-sample run-sample-pipeline demo-script test-llm
+.PHONY: setup system-deps dev dev-api dev-ui dev-local-mac dev-local-cuda test worker dashboard lint format render-sample run-sample-pipeline demo-script test-llm
 
-setup:
+setup: system-deps
 	cd backend && uv sync --group dev --extra llm --extra audio --extra embeddings --extra images
 	corepack enable
 	cd frontend && corepack prepare && pnpm install --frozen-lockfile
+
+# OS packages Python cannot install: espeak-ng backs Kokoro's phonemizer.
+# Installs through Homebrew when present; otherwise prints what to install.
+system-deps:
+	@if command -v espeak-ng >/dev/null 2>&1; then \
+		echo "espeak-ng already installed"; \
+	elif command -v brew >/dev/null 2>&1; then \
+		brew install espeak-ng; \
+	else \
+		echo "espeak-ng is missing; install it with your OS package manager (e.g. sudo apt install espeak-ng)"; \
+	fi
 
 # API :8091 and dashboard :3091. Ctrl+C stops both.
 dev:
