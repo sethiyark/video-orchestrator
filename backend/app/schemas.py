@@ -217,8 +217,10 @@ class StoryboardChunk(StrictModel):
     scenes: list[PlannedScene] = Field(min_length=1, max_length=20)
 
     @model_validator(mode="after")
-    def contiguous(self):
-        previous = None
+    def spans(self):
+        # Only per-scene bounds are enforced here. Small gaps or overlaps
+        # between scenes are a common model slip; the provider snaps the
+        # ranges to contiguous coverage of the chunk instead of failing.
         for scene in self.scenes:
             span = scene.last_sentence - scene.first_sentence + 1
             if not 1 <= span <= MAX_SCENE_SENTENCES:
@@ -226,11 +228,6 @@ class StoryboardChunk(StrictModel):
                     f"each scene must cover 1-{MAX_SCENE_SENTENCES} sentences "
                     f"(got {scene.first_sentence}-{scene.last_sentence})"
                 )
-            if previous is not None and scene.first_sentence != previous + 1:
-                raise ValueError(
-                    "scenes must cover consecutive sentences with no gaps or overlaps"
-                )
-            previous = scene.last_sentence
         return self
 
 

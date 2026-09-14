@@ -464,13 +464,42 @@ def test_storyboard_plans_sentence_chunks_and_copies_narration(tmp_path):
     assert " ".join(s["narration_text"] for s in scenes) == text
     assert scenes[0]["duration_seconds"] == round(28 / 2.5, 1)
 
+    # Off-by-one boundaries are snapped, not rejected: an overlap (5-8 then
+    # 8-12) trims the later scene, a gap (12 then 14) and a short tail (15)
+    # are absorbed, and a scene left with nothing to narrate is dropped.
     runner.outputs = iter(
         [
-            {"scenes": [card(1, 4), card(5, 8), card(9, 12), card(13, 15)]},
-            {"scenes": [card(17, 20)]},
+            {
+                "scenes": [
+                    card(1, 4),
+                    card(5, 8),
+                    card(8, 12),
+                    card(14, 15),
+                    card(9, 10),
+                ]
+            },
+            {"scenes": [card(18, 20)]},
         ]
     )
-    with pytest.raises(ReviewRequired, match="sentences 1-16"):
+    result = asyncio.run(provider.execute("storyboard", job))
+    scenes = result["scenes"]
+    assert [s["scene_id"] for s in scenes] == [f"scene_{i:03d}" for i in range(1, 6)]
+    assert " ".join(s["narration_text"] for s in scenes) == text
+    assert scenes[3]["narration_text"].startswith("Sentence number 13 ")
+    assert scenes[3]["narration_text"].endswith(
+        "Sentence number 16 explains one DNS step."
+    )
+    assert scenes[4]["narration_text"].startswith("Sentence number 17 ")
+
+    # A plan that lies entirely outside its chunk (the model restarted its
+    # numbering) is still a review error.
+    runner.outputs = iter(
+        [
+            {"scenes": [card(1, 4), card(5, 8), card(9, 12), card(13, 16)]},
+            {"scenes": [card(1, 4)]},
+        ]
+    )
+    with pytest.raises(ReviewRequired, match="sentences 17-20"):
         asyncio.run(provider.execute("storyboard", job))
 
 

@@ -84,9 +84,13 @@ narration runtime's boundaries) and planned in chunks of
 one model load. The model receives `{"sentences": [{"n", "text"}]}` and
 returns scenes as `first_sentence`/`last_sentence` + `component` + `props`;
 it never re-emits narration, so output size does not grow with the script.
-The chunk schema requires 1–6 sentences per scene (`MAX_SCENE_SENTENCES`) with no gaps or overlaps;
-the provider requires each chunk's scenes to span exactly its sentence
-numbers, then copies the exact `narration_text`, numbers `scene_NNN` ids,
+The chunk schema requires 1–6 sentences per scene (`MAX_SCENE_SENTENCES`).
+Gaps and overlaps between scenes are not schema errors: `cover_sentences`
+sorts the scenes and snaps them onto the chunk (each scene starts right after
+the previous one ends, the first at the chunk's first sentence, the last ends
+at its last; a scene left with no sentences is dropped; every snap is logged
+at warning). Only a plan lying entirely outside its chunk raises
+`ReviewRequired`. The provider then copies the exact `narration_text`, numbers `scene_NNN` ids,
 sets `duration_seconds = max(words / 2.5, 2)`, and validates the assembled
 `Storyboard` (a violation such as >120 scenes or a >60 s scene is
 `ReviewRequired`).

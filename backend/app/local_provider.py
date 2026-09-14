@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import logging
 import math
 import re
 import tempfile
@@ -26,6 +27,8 @@ from .schemas import (
 )
 from .series.library import VISUAL_KINDS, SeriesLibrary
 from .series.store import SeriesNotFound
+
+log = logging.getLogger(__name__)
 
 CRITICS = ("accuracy", "retention", "clarity", "originality", "style")
 
@@ -227,6 +230,46 @@ def current_script(job):
     return output_for(job, "critique").get("approved_script") or output_for(
         job, "script"
     )
+
+
+def cover_sentences(planned, first, last):
+    """Snap planned scenes onto sentences ``first``..``last`` (1-based, inclusive)
+    so every sentence belongs to exactly one scene, in order.
+
+    Models often misnumber boundaries by one: a scene ends at 4 and the next
+    starts at 4 (overlap) or at 6 (gap). Rather than rejecting the whole chunk,
+    each scene starts right after the previous one ends (the first at
+    ``first``), keeps its planned end clamped to ``last``, and the final scene
+    ends at ``last``. A scene left with no sentences is dropped. Only a plan
+    that lies entirely outside the chunk is rejected.
+    """
+    ordered = sorted(planned, key=lambda s: (s["first_sentence"], s["last_sentence"]))
+    if ordered[0]["first_sentence"] > last or ordered[-1]["last_sentence"] < first:
+        raise ReviewRequired(
+            f"Storyboard did not cover narration sentences {first}-{last}"
+        )
+    scenes = []
+    cursor = first
+    for index, scene in enumerate(ordered):
+        end = last if index == len(ordered) - 1 else min(scene["last_sentence"], last)
+        if end < cursor:
+            log.warning(
+                "Storyboard dropped scene %s-%s: sentences already covered",
+                scene["first_sentence"],
+                scene["last_sentence"],
+            )
+            continue
+        if (cursor, end) != (scene["first_sentence"], scene["last_sentence"]):
+            log.warning(
+                "Storyboard snapped scene %s-%s to %s-%s",
+                scene["first_sentence"],
+                scene["last_sentence"],
+                cursor,
+                end,
+            )
+        scenes.append({**scene, "first_sentence": cursor, "last_sentence": end})
+        cursor = end + 1
+    return scenes
 
 
 class LocalProvider:
@@ -622,15 +665,7 @@ class LocalProvider:
         results = await self.llm_batch("storyboard", job, requests)
         scenes = []
         for chunk, result in zip(chunks, results):
-            planned = result["scenes"]
-            if (
-                planned[0]["first_sentence"] != chunk.start + 1
-                or planned[-1]["last_sentence"] != chunk.stop
-            ):
-                raise ReviewRequired(
-                    f"Storyboard did not cover narration sentences {chunk.start + 1}-"
-                    f"{chunk.stop} exactly"
-                )
+            planned = cover_sentences(result["scenes"], chunk.start + 1, chunk.stop)
             for scene in planned:
                 text = " ".join(
                     lines[scene["first_sentence"] - 1 : scene["last_sentence"]]
