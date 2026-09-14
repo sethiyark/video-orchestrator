@@ -20,7 +20,15 @@ dependencies = [
 
 [project.optional-dependencies]
 llm = ["llama-cpp-python>=0.3.35,<0.4"]
-audio = ["kokoro>=0.9.4,<1", "soundfile>=0.13,<1", "faster-whisper>=1.2,<2", "qwen-tts>=0.1,<1", "ctc-forced-aligner>=1.0,<2"]
+audio = [
+    "kokoro>=0.9.4,<1",
+    "soundfile>=0.13,<1",
+    "faster-whisper>=1.2,<2",
+    "qwen-tts>=0.1,<1",
+    "ctc-forced-aligner>=1.0,<2",
+    # spaCy English package Kokoro's phonemizer loads (runtime.py); not on PyPI.
+    "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
+]
 embeddings = ["sentence-transformers>=5,<6"]
 images = ["diffusers>=0.35,<0.36", "transformers>=4.51,<5", "accelerate>=1.7,<2", "safetensors>=0.5,<1", "torch>=2.6,<3", "gguf>=0.10,<1", "sentencepiece>=0.2,<1", "protobuf>=4,<7"]
 

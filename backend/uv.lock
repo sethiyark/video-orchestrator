@@ -896,6 +896,14 @@ wheels = [
 ]
 
 [[package]]
+name = "en-core-web-sm"
+version = "3.8.0"
+source = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" }
+wheels = [
+    { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl", hash = "sha256:1932429db727d4bff3deed6b34cfc05df17794f4a52eeb26cf8928f7c1a0fb85" },
+]
+
+[[package]]
 name = "espeakng-loader"
 version = "0.2.4"
 source = { registry = "https://pypi.org/simple" }
@@ -3894,6 +3902,7 @@ dependencies = [
 [package.optional-dependencies]
 audio = [
     { name = "ctc-forced-aligner" },
+    { name = "en-core-web-sm" },
     { name = "faster-whisper" },
     { name = "kokoro" },
     { name = "qwen-tts" },
@@ -3929,6 +3938,7 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.14,<2" },
     { name = "ctc-forced-aligner", marker = "extra == 'audio'", specifier = ">=1.0,<2" },
     { name = "diffusers", marker = "extra == 'images'", specifier = ">=0.35,<0.36" },
+    { name = "en-core-web-sm", marker = "extra == 'audio'", url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" },
     { name = "fastapi", specifier = ">=0.115,<1" },
     { name = "faster-whisper", marker = "extra == 'audio'", specifier = ">=1.2,<2" },
     { name = "filelock", specifier = ">=3.16,<4" },

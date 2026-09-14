@@ -98,16 +98,12 @@ uv pip install --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/
 
 The default YAML uses CPU to remain portable. Leave embeddings on CPU; Whisper and the CTC aligner run on CPU or CUDA. VRAM fit and speed must be measured on the actual GPU; reduce context size or GPU layers if needed.
 
-Kokoro's English phonemizer also needs the spaCy English package and `espeak-ng`. Install `espeak-ng` through your OS package manager, then:
-
-```sh
-uv pip install https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
-```
-
-(`python -m spacy download` needs pip, which a uv-managed `.venv` does not
-ship; the wheel version must match the installed spaCy 3.8.x.) Without the
-package the narration stage fails with `OSError: [E050] Can't find model
-'en_core_web_sm'`.
+Kokoro's English phonemizer also needs `espeak-ng` (install it through your
+OS package manager, e.g. `brew install espeak-ng` or `apt install espeak-ng`)
+and the spaCy English package. The `audio` extra pins that package
+(`en-core-web-sm` 3.8.0, a direct wheel URL since it is not on PyPI), so
+`uv sync --extra audio` installs it; if the narration stage fails with
+`OSError: [E050] Can't find model 'en_core_web_sm'`, re-run the sync.
 
 Prepare the configured model files explicitly, either with the **Download weights** and **Install runtime** buttons in the Model library panel (installs run `uv sync --extra …` in `backend/` and can take several minutes; progress is shown on the card) or from the shell:
 
