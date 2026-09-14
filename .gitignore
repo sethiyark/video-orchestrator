@@ -216,3 +216,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Frontend and local app state
+node_modules/
+dist/
+.output/
+.tanstack/
+backend/data/
+.env.local
+
+.tmp/

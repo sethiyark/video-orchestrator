@@ -1,0 +1,3 @@
+# Local development overlays. Secrets stay in the environment.
+observability:
+  log_format: text
