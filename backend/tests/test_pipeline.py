@@ -292,3 +292,23 @@ def test_config_change_mid_run_is_recorded_not_blocking(tmp_path):
     assert (change["previous"], change["current"]) == ("v1", "v2")
     assert change["pending_stages_affected"] == ["script"]
     assert provider.calls.count("script") == 1
+
+
+def test_same_stage_validation_repair_is_bounded(tmp_path):
+    class InvalidProvider(MockProvider):
+        async def execute(self, stage, job, attempt=0):
+            if stage == "outline":
+                raise ReviewRequired("Invalid outline", rewind_to="outline")
+            return await super().execute(stage, job, attempt)
+
+    with TestClient(create_app(
+        str(tmp_path / "jobs.db"), InvalidProvider(0),
+        local_settings(tmp_path, max_rewinds=2),
+    )) as client:
+        job_id = client.post("/api/jobs", json={"title": "DNS", "sources": SOURCES}).json()["id"]
+        client.post(f"/api/jobs/{job_id}/run")
+        job = wait(client, job_id, "failed")
+        assert job["rewinds"] == {"outline": 2}
+        attempts = client.get(f"/api/jobs/{job_id}/attempts").json()
+        assert len([a for a in attempts if a["stage"] == "outline"]) == 3
+        assert all(s["output"] is None for s in job["stages"][3:])

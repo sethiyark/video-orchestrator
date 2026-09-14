@@ -210,7 +210,7 @@ def create_app(
         store.save(job)
 
     def rewind(job, stage, exc):
-        """Send a failed stage back to the earlier stage its error names, with
+        """Send a failed stage back to the same or earlier stage its error names, with
         the error's details as corrections, while the Governor budget allows.
         Returns True when the job was rewound and the stage loop should
         restart from the first incomplete stage."""
@@ -219,7 +219,7 @@ def create_app(
         if (
             settings.mode != "local"
             or target not in names
-            or names.index(target) >= names.index(stage["name"])
+            or names.index(target) > names.index(stage["name"])
         ):
             return False
         rewinds = job.setdefault("rewinds", {})
@@ -227,9 +227,7 @@ def create_app(
         if count >= settings.models.governor.max_rewinds:
             return False
         rewinds[stage["name"]] = count + 1
-        for entry in job["stages"][
-            names.index(target) : names.index(stage["name"]) + 1
-        ]:
+        for entry in job["stages"][names.index(target) :]:
             entry["status"], entry["output"] = "pending", None
         job.setdefault("corrections", {})[target] = {
             "from_stage": stage["name"],
