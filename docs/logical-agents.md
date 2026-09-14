@@ -73,7 +73,10 @@ draft → five critics in one model load (seeds 42+i, critic_temperature)
   → aggregate (MINIMUM score; any required_changes fail)
   → pass Governor min_script_score
   → else required_changes only → rewrite (script route)
-  → critique_rounds exhausted → ReviewRequired
+  → critique_rounds exhausted → ReviewRequired(rewind_to="script")
+  → worker rewinds to script with required_changes + last draft
+    (up to Governor max_rewinds), then critique runs again
+  → budget exhausted → job fails for human review
 ```
 
 Writer does not score itself. The strictest critic decides; the mean is not
@@ -94,5 +97,6 @@ models, full text-to-video as a dependency.
 ## Related tests
 
 `test_source_grounding_and_model_routing`, `test_critics_have_bounded_independent_rounds`,
-`test_critique_rewrites_with_required_changes_only`
+`test_critique_rewrites_with_required_changes_only`,
+`test_script_rewrites_from_critique_corrections`
 in [`backend/tests/test_local_provider.py`](../backend/tests/test_local_provider.py).

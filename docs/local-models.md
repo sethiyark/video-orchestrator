@@ -54,9 +54,10 @@ system prompt by the child, which also renders a template that supports
 2. `MODEL_CONFIG=… python -m app.models.cli download ROLE` (or `all`), or
    click **Download weights** / **Install runtime** on the card. Installs run
    `uv sync --extra <extra>` in `backend/` and can take minutes.
-3. Create a **new** draft (`config_hash` is stored on the job), or
-   **restart** an existing draft/failed/awaiting/completed job so stages
-   rebind to the live hash.
+3. Existing jobs keep going on the new configuration: the change is recorded
+   on the job (`config_changes`, with the pending stages it affects) and shown
+   on the job page. **Restart** a draft/failed/awaiting/completed job only
+   when you want every stage regenerated with the current models.
 
 Metal needs the Metal wheel of `llama-cpp-python` (README). Whisper and the
 CTC aligner run on CPU or CUDA only.

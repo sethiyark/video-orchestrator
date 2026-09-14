@@ -27,8 +27,8 @@ No fill/model arithmetic.
 | GET | `/api/jobs/{id}/attempts` | Attempt history |
 | GET | `/api/jobs/{id}/artifacts/{artifact_id}` | FileResponse; IDs cannot contain paths |
 | POST | `/api/jobs/{id}/artifacts/{artifact_id}/promote` | `{name, kind}`; copies a `.png`/`.wav` stage media output into the job's series library. 201 new, 200 duplicate; 409 no series; 415 not promotable; 404 not a media output; 413 over cap |
-| POST | `/api/jobs/{id}/run` | `draft`/`failed` → `queued`; 409 if local `config_hash` is stale or `series_stale` |
-| POST | `/api/jobs/{id}/restart` | Wipe stages, rebind `config_hash` and the series snapshot, `queued`; not while queued/running |
+| POST | `/api/jobs/{id}/run` | `draft`/`failed` → `queued`; 409 if `series_stale`. A changed local model config does not block: it is recorded in `config_changes` and the job continues |
+| POST | `/api/jobs/{id}/restart` | Wipe stages, rebind `config_hash`/`stage_hashes` and the series snapshot, clear `config_changes`/`rewinds`/`corrections`, `queued`; not while queued/running |
 | POST | `/api/jobs/{id}/approve` | `awaiting_approval` → `queued` + `approved_at` |
 | DELETE | `/api/jobs/{id}` | 204; removes the job, its stage records, and attempts, and returns a linked idea to `backlog`. Any status. 404 unknown job |
 | GET/POST | `/api/series` | List newest first / create `{name, slug?, description?}` (409 duplicate slug) |
@@ -55,6 +55,14 @@ CORS: `GET`/`POST`/`PUT`/`PATCH`/`DELETE`, origins from `CORS_ORIGINS` (default 
 422), `library_source_ids` ≤10 (requires a series; merged sources must stay
 unique and ≤10, else 422). Job payloads include `series_id`, `theme_id`,
 `idea_id`, `series_context`, `series_hash`, and computed `series_stale`.
+Local jobs carry `stage_hashes` (per-stage model fingerprints at creation or
+restart) and `config_changes` (one entry per model-config change noticed at
+`/run` or by the worker; `pending_stages_affected` lists the not-yet-completed
+stages whose route/model fingerprint moved, or every pending stage for a job
+created before `stage_hashes` existed). Jobs the worker has sent back to an earlier stage also carry `rewinds`
+(`{failed_stage: count}`) and `corrections` (`{target_stage: {from_stage,
+attempt, message, ...error details}}`, cleared once the failing stage passes;
+see [providers.md](providers.md)).
 Series details: [series.md](series.md).
 
 `ModelOverride`: all fields optional; `model_dump(exclude_unset=True)` so an
@@ -69,7 +77,10 @@ alone. Setup state is `{state, started_at, ended_at, error, log}`.
 
 - 409 if job mode ≠ `PIPELINE_MODE`.
 - Local create without sources → 422.
-- Local `/run` with a stale `config_hash` → 409; `/restart` rebases the job.
+- Local `/run` never refuses a stale `config_hash`: `rebase_config` appends
+  `{at, previous, current, pending_stages_affected}` to `config_changes`,
+  stamps the live `config_hash`/`stage_hashes`, and the worker does the same
+  before every stage. `/restart` rebases from scratch.
 - `/run` on a job whose series bible/theme changed → 409; `/restart` rebinds.
 - Series uploads are allowlisted by type and magic bytes and served as
   attachments.
@@ -84,7 +95,7 @@ alone. Setup state is `{state, started_at, ended_at, error, log}`.
 `test_models_endpoint_reports_setup_fields`,
 `test_download_endpoint_runs_hub_in_background`,
 `test_install_endpoint_uses_fixed_command`, `test_config_override_endpoints`,
-`test_config_change_fails_in_flight_job`, `test_delete_job_removes_job_and_attempts`,
+`test_config_change_is_recorded_and_job_continues`, `test_delete_job_removes_job_and_attempts`,
 `test_delete_unknown_job_is_404`, pipeline tests in `test_pipeline.py`, series
 tests in `test_series.py`.
 

@@ -23,9 +23,32 @@ nothing was sent to YouTube.
 Worker retries: local uses `models.governor.max_attempts`; mock is 1 attempt
 (manual retry). Mock failures stay manual.
 
+Rewinds (local only): when a stage's final attempt raises `ReviewRequired`
+with `rewind_to` set to an earlier stage, `create_app`'s `rewind` resets
+every stage from the target through the failed one to `pending` (outputs
+cleared), stores `job["corrections"][target] = {from_stage, attempt, message,
+**details}`, increments `job["rewinds"][failed_stage]`, and `run_stages`
+starts again from the first incomplete stage. Each failed attempt is still
+recorded in `stage_attempts`. Once `rewinds[failed_stage]` reaches
+`governor.max_rewinds` the error propagates and the job fails for human
+review as before. A correction is deleted when the stage that raised it
+completes. `/restart` clears `rewinds` and `corrections`; `/run` (retry)
+keeps them, so a job that used its budget stays manual until restarted.
+Mock mode never rewinds.
+
+Config changes (local only): `rebase_config` runs at `/run` and before every
+stage. If `provider.config_hash` differs from the job's, it appends
+`{at, previous, current, pending_stages_affected}` to `job["config_changes"]`
+(affected = pending stages whose `provider.stage_hashes` entry differs from the
+job's stored `stage_hashes`; all pending stages when the job predates
+`stage_hashes`), stamps the live hashes, logs, and continues. The pipeline is
+never refused for a config change; a model that cannot load fails its own
+stage with `ModelNotReady`, and the operator can `/restart` for a clean run.
+
 ## Related tests
 
-`test_pipeline.py` (mock worker).
+`test_pipeline.py` (mock worker; `test_failed_stage_rewinds_with_corrections_and_continues`,
+`test_rewind_budget_is_bounded_then_requires_review`, `test_mock_mode_never_rewinds`, `test_config_change_mid_run_is_recorded_not_blocking`).
 
 ## Known limitations
 

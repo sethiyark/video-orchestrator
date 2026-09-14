@@ -12,10 +12,17 @@ integrations.
 
 ## Public surface
 
-`ReviewRequired` (evidence/config; no retry), `IntegrationUnavailable`
-(render/upload). `config_hash` fingerprints YAML + cached revisions.
-`POST /api/jobs/{id}/restart` wipes stage outputs, stamps the live hash, and
-queues from research so a config change cannot mix with prior artifacts.
+`ReviewRequired(message, details, rewind_to=None)` (evidence/config; no
+worker retry). With `rewind_to` naming an earlier stage, the worker may send
+the job back to that stage with `details` as corrections instead of stopping
+(see [providers.md](providers.md), Governor `max_rewinds`). Today only critique
+sets it (`rewind_to="script"`). `IntegrationUnavailable` (render/upload). `config_hash` fingerprints YAML + cached revisions; `stage_hashes` fingerprints,
+per stage, the route, that role's spec, its cached revision (and
+`images_enabled` for assets). A changed config never blocks a job: the worker
+records it on the job and continues (see [providers.md](providers.md)); every
+stage output still carries the provenance it actually ran with.
+`POST /api/jobs/{id}/restart` wipes stage outputs, stamps the live hashes, and
+queues from research when the operator wants a clean run instead.
 
 `llm_batch(stage, job, requests)` sends several JSON requests to **one**
 child (one model load); `llm(...)` wraps a single request. Before any call,
@@ -32,7 +39,14 @@ alignment, similarity (cosine vs prior completed similarity JSON), metadata.
 
 Critique: `governor.critique_rounds` rounds; each round is one batch of five
 critics (`CRITICS`, seeds `42+i`, `governor.critic_temperature`), aggregated
-by the **minimum** score; any `required_changes` blocks. Critics and the
+by the **minimum** score; any `required_changes` blocks. Critics are told the
+draft is spoken voiceover with no headings or visuals to add, and that
+`required_changes` is only for blocking defects a narration rewrite can
+satisfy (empty when acceptable). When the rounds are exhausted the stage
+writes `{rounds, last_draft}` as a review artifact and raises
+`ReviewRequired(..., {review_artifact, required_changes, score},
+rewind_to="script")`, where `required_changes` is the last round's per-critic
+list (non-empty critics only). Critics and the
 rewrite see only the draft's `text` and `claim_ids` (`script_body`), never its
 provenance/artifact fields. The rewrite (`LocalProvider.rewrite`) goes
 through `write_sections` over the draft's stored `sections` (a draft without
@@ -42,7 +56,13 @@ section's verified claims, and asks for a revised `ScriptSection`.
 
 Script: the stage requires a completed outline (`ReviewRequired` otherwise)
 and writes narration one `ScriptSection` request per outline section in one
-model load (`write_sections`). Each request receives the brief, its
+model load (`write_sections`). When the worker has rewound critique to script,
+`job["corrections"]["script"]` holds the critique error's details; each
+section request then also carries `required_changes` and `previous_attempt`
+(that section's text from the review artifact's `last_draft`, via
+`previous_draft`; `null` if the section counts differ) plus an instruction to
+write a fresh version rather than lightly edit. Without corrections the
+prompt is unchanged. Each request receives the brief, its
 `section_number`/`section_count`, the section (`title`, `purpose`,
 `estimated_seconds`, `target_words = estimated_seconds × WORDS_PER_SECOND`),
 the outline's titles/purposes, and only the verified claims the section
@@ -115,7 +135,8 @@ incomplete stage.
 - Series guidance never reaches research/verification and cannot satisfy a
   claim; `SeriesAsset` ids outside the job's active series images/logos fail
   closed, at storyboard and again when pinned.
-- New draft after model config/revision change.
+- A model config/revision change is recorded per job (`config_changes`) and
+  per stage output (provenance); it does not stop a job.
 
 ## Related tests
 

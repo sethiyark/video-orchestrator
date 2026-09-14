@@ -96,8 +96,10 @@ button (name via `window.prompt`) that POSTs
 file body), `assetUrl`, and flattens FastAPI validation errors into
 `field: message` strings. Actions POST `/jobs/{id}/run`, `/restart` (clears
 stages and rebases `config_hash`), and `/approve`. Narration download via
-`artifactUrl`. When the job error mentions model configuration, Restart is
-the primary action.
+`artifactUrl`. A job with `config_changes` shows a note that the pipeline
+continues on the current models and which pending stages the latest change
+affects; a job with `corrections` shows which stage sent it back and why.
+`configChanged` (`lib/format.ts`) still matches legacy error text.
 
 Delete: `apiDelete` (`lib/api.ts`) issues `DELETE /jobs/{id}` (no JSON body on
 204 success). Available in two places, both gated by a `window.confirm`

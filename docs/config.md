@@ -38,8 +38,9 @@ LLM stages → `llama_cpp`; narration → `kokoro | qwen_tts`; alignment →
 `steps`.
 
 `Governor` (in `models.yaml`): `max_attempts` (worker retries per stage),
-`critique_rounds`, `critic_temperature`, `min_script_score`,
-`min_research_confidence`, `max_similarity`, `max_images`,
+`critique_rounds`, `critic_temperature`, `min_script_score`, `max_rewinds`
+(times the worker sends a failed stage back to an earlier one with
+corrections, default 2; 0 disables), `min_research_confidence`, `max_similarity`, `max_images`,
 `min_narration_fidelity`.
 
 `MODEL_CONFIG` selects a hardware profile: `config/models.mac.yaml` or
