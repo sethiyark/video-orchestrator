@@ -87,6 +87,13 @@ class Script(StrictModel):
     claim_ids: list[str] = Field(min_length=1)
 
 
+class ScriptSection(StrictModel):
+    """Model output for one outline section; the provider joins sections."""
+
+    text: Prose = Field(min_length=30, max_length=4000)
+    claim_ids: list[str] = Field(min_length=1)
+
+
 class Critic(StrictModel):
     score: float = Field(ge=0, le=10)
     issues: list[Note] = Field(max_length=6)

@@ -138,8 +138,22 @@ def test_script_cannot_reference_unverified_claims(tmp_path):
         "verification",
         {"verified_claims": [{"id": "c1", "text": "DNS maps names"}]},
     )
+    complete(job, "outline", {"sections": [section("DNS", 10)]})
     with pytest.raises(ReviewRequired, match="outside"):
         asyncio.run(provider.execute("script", job))
+
+
+def section(title, seconds, claim_ids=("c1",)):
+    return {
+        "title": title,
+        "purpose": f"Explain {title}",
+        "claim_ids": list(claim_ids),
+        "estimated_seconds": seconds,
+    }
+
+
+def words(n, seed="word"):
+    return " ".join(f"{seed}{i}" for i in range(n)) + "."
 
 
 def test_critics_have_bounded_independent_rounds(tmp_path):
@@ -341,29 +355,126 @@ def test_storyboard_plans_sentence_chunks_and_copies_narration(tmp_path):
         asyncio.run(provider.execute("storyboard", job))
 
 
-def test_truncated_script_fails_closed_against_outline(tmp_path):
-    leak = {
-        "text": "DNS maps domain names to IP addresses quickly.",
-        "claim_ids": ["c1"],
-    }
-    provider, _, job = setup(tmp_path, [leak])
+def test_script_is_written_per_outline_section_and_stitched(tmp_path):
+    provider, runner, job = setup(
+        tmp_path,
+        [
+            {"text": words(30, "a"), "claim_ids": ["c1"]},
+            {"text": words(30, "b"), "claim_ids": ["c2"]},
+            {"text": words(30, "c"), "claim_ids": ["c1", "c2"]},
+        ],
+    )
+    verified = [{"id": "c1", "text": "DNS"}, {"id": "c2", "text": "TTL"}]
+    complete(job, "verification", {"verified_claims": verified})
+    outline = [
+        section("Intro", 40, ["c1"]),
+        section("TTL", 40, ["c2"]),
+        section("Wrap", 40, ["c1", "c2"]),
+    ]
+    complete(job, "outline", {"sections": outline})
+    result = asyncio.run(provider.execute("script", job))
+    # One model load, one request per section, nothing re-emitted.
+    assert len(runner.calls) == 1
+    requests = runner.calls[0][1]["requests"]
+    assert [r["schema_name"] for r in requests] == ["ScriptSection"] * 3
+    payloads = [json.loads(r["messages"][1]["content"]) for r in requests]
+    assert [p["section_number"] for p in payloads] == [1, 2, 3]
+    assert all(p["section_count"] == 3 for p in payloads)
+    assert payloads[1]["section"]["target_words"] == int(40 * 2.5)
+    assert [c["id"] for c in payloads[1]["verified_claims"]] == ["c2"]
+    assert [o["title"] for o in payloads[0]["outline"]] == ["Intro", "TTL", "Wrap"]
+    assert result["text"] == "\n\n".join(
+        [words(30, "a"), words(30, "b"), words(30, "c")]
+    )
+    assert result["claim_ids"] == ["c1", "c2"]
+    assert [s["title"] for s in result["sections"]] == ["Intro", "TTL", "Wrap"]
+
+
+def test_short_section_is_retried_once_then_fails_closed(tmp_path):
+    provider, runner, job = setup(
+        tmp_path,
+        [
+            {"text": words(40), "claim_ids": ["c1"]},
+            {"text": words(7), "claim_ids": ["c1"]},
+            {"text": words(8), "claim_ids": ["c1"]},
+        ],
+    )
     complete(job, "verification", {"verified_claims": [{"id": "c1", "text": "DNS"}]})
+    complete(job, "outline", {"sections": [section("A", 60), section("B", 600)]})
+    with pytest.raises(ReviewRequired, match="Section 2 'B' has 8 words"):
+        asyncio.run(provider.execute("script", job))
+    assert [len(payload["requests"]) for _, payload in runner.calls] == [2, 1]
+    retry = json.loads(runner.calls[1][1]["requests"][0]["messages"][1]["content"])
+    assert retry["section_number"] == 2
+    assert retry["previous_attempt_words"] == 7
+    assert "1500 words" in retry["note"]
+
+
+def test_short_section_retry_succeeds(tmp_path):
+    provider, runner, job = setup(
+        tmp_path,
+        [
+            {"text": words(40), "claim_ids": ["c1"]},
+            {"text": words(7), "claim_ids": ["c1"]},
+            {"text": words(400, "long"), "claim_ids": ["c1"]},
+        ],
+    )
+    complete(job, "verification", {"verified_claims": [{"id": "c1", "text": "DNS"}]})
+    complete(job, "outline", {"sections": [section("A", 60), section("B", 600)]})
+    result = asyncio.run(provider.execute("script", job))
+    assert [len(payload["requests"]) for _, payload in runner.calls] == [2, 1]
+    assert result["sections"][1]["text"] == words(400, "long")
+
+
+def test_script_requires_an_outline(tmp_path):
+    provider, runner, job = setup(tmp_path, [])
+    complete(job, "verification", {"verified_claims": [{"id": "c1", "text": "DNS"}]})
+    with pytest.raises(ReviewRequired, match="outline"):
+        asyncio.run(provider.execute("script", job))
+    assert runner.calls == []
+
+
+def test_critique_rewrites_each_draft_section(tmp_path):
+    failing = {
+        "score": 4,
+        "issues": [],
+        "required_changes": ["tighten"],
+        "optional_changes": [],
+    }
+    passing = {"score": 9, "issues": [], "required_changes": [], "optional_changes": []}
+    provider, runner, job = setup(
+        tmp_path,
+        [deepcopy(failing) for _ in range(5)]
+        + [
+            {"text": words(30, "x"), "claim_ids": ["c1"]},
+            {"text": words(30, "y"), "claim_ids": ["c1"]},
+        ]
+        + [deepcopy(passing) for _ in range(5)],
+    )
+    provider.config.governor.critique_rounds = 2
+    complete(job, "verification", {"verified_claims": [{"id": "c1", "text": "DNS"}]})
+    complete(job, "outline", {"sections": [section("A", 20), section("B", 20)]})
     complete(
         job,
-        "outline",
+        "script",
         {
+            "text": "One.\n\nTwo.",
+            "claim_ids": ["c1"],
             "sections": [
-                {
-                    "title": "DNS",
-                    "purpose": "x",
-                    "claim_ids": ["c1"],
-                    "estimated_seconds": 600,
-                }
-            ]
+                {"title": "A", "text": "One.", "claim_ids": ["c1"]},
+                {"title": "B", "text": "Two.", "claim_ids": ["c1"]},
+            ],
         },
     )
-    with pytest.raises(ReviewRequired, match="looks truncated"):
-        asyncio.run(provider.execute("script", job))
+    result = asyncio.run(provider.execute("critique", job))
+    assert [len(payload["requests"]) for _, payload in runner.calls] == [5, 2, 5]
+    rewrite = [
+        json.loads(r["messages"][1]["content"]) for r in runner.calls[1][1]["requests"]
+    ]
+    assert [r["draft"]["text"] for r in rewrite] == ["One.", "Two."]
+    assert all("tighten" in json.dumps(r["required_changes"]) for r in rewrite)
+    assert result["approved_script"]["text"] == words(30, "x") + "\n\n" + words(30, "y")
+    assert [s["title"] for s in result["approved_script"]["sections"]] == ["A", "B"]
 
 
 def test_critics_receive_only_script_text_and_claims(tmp_path):

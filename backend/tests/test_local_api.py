@@ -68,7 +68,7 @@ class PipelineFixtureRunner:
                     }
                 ]
             },
-            "Script": {
+            "ScriptSection": {
                 "text": "DNS maps domain names to IP addresses.",
                 "claim_ids": ["c1"],
             },

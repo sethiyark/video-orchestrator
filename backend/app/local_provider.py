@@ -17,6 +17,7 @@ from .schemas import (
     Outline,
     Research,
     Script,
+    ScriptSection,
     Storyboard,
     StoryboardChunk,
     Verification,
@@ -33,9 +34,12 @@ SENTENCE_SPLIT = r"(?<=[.!?])\s+|\n+"
 STORYBOARD_CHUNK_SENTENCES = 16
 # Narration pace used for scene durations and the script length floor.
 WORDS_PER_SECOND = 2.5
-# A script shorter than this share of its outline's estimated runtime is a
-# truncated or off-task generation, not a concise explainer.
+# A script (or one of its sections) shorter than this share of its outline's
+# estimated runtime is a truncated or off-task generation, not a concise
+# explainer.
 MIN_SCRIPT_COVERAGE = 0.25
+# Extra batches that re-ask only the sections that came back too short.
+SCRIPT_RETRY_ROUNDS = 1
 
 # Which parts of a job's series snapshot each prompt receives.
 SERIES_SECTIONS = {
@@ -111,6 +115,54 @@ def sentences(text):
 def script_body(script):
     """The narration fields a prompt needs, without provenance/artifact noise."""
     return {"text": script["text"], "claim_ids": script["claim_ids"]}
+
+
+def section_target(section):
+    """Words the narration pace allows for an outline section."""
+    return int(section["estimated_seconds"] * WORDS_PER_SECOND)
+
+
+def section_floor(section):
+    return int(section_target(section) * MIN_SCRIPT_COVERAGE)
+
+
+def claims_for(section, verified):
+    """Verified claims an outline section cites; all of them if it cites none."""
+    wanted = set(section.get("claim_ids", []))
+    chosen = [claim for claim in verified if claim["id"] in wanted]
+    return chosen or verified
+
+
+def script_parts(draft):
+    """A draft's sections, or the whole draft as one part for legacy drafts."""
+    return draft.get("sections") or [
+        {"title": "", "text": draft["text"], "claim_ids": draft["claim_ids"]}
+    ]
+
+
+def assemble_script(sections):
+    """Join per-section narration into one Script, keeping the sections."""
+    claim_ids = list(
+        dict.fromkeys(
+            claim_id for section in sections for claim_id in section["claim_ids"]
+        )
+    )
+    text = "\n\n".join(section["text"] for section in sections)
+    try:
+        script = Script.model_validate({"text": text, "claim_ids": claim_ids})
+    except ValueError as exc:
+        raise ReviewRequired(f"Assembled script is out of bounds: {exc}") from exc
+    return {
+        **script.model_dump(),
+        "sections": [
+            {
+                "title": section["title"],
+                "text": section["text"],
+                "claim_ids": section["claim_ids"],
+            }
+            for section in sections
+        ],
+    }
 
 
 def current_script(job):
@@ -255,6 +307,104 @@ class LocalProvider:
                 f"(at least {minimum} words expected); the generation looks truncated "
                 "or off-task. Review the script or restart the job."
             )
+
+    async def write_sections(self, job, sections, verified, build_request):
+        """Generate narration one outline section per request in one model
+        load, re-ask only the sections that come back too short, and join them.
+
+        ``sections`` are outline sections (title, purpose, claim_ids,
+        estimated_seconds); ``build_request(index, section)`` returns
+        (instructions, data) for one section."""
+        pending = list(range(len(sections)))
+        outputs = [None] * len(sections)
+        provenance = None
+        for attempt in range(SCRIPT_RETRY_ROUNDS + 1):
+            requests = []
+            for index in pending:
+                instructions, data = build_request(index, sections[index])
+                if attempt:
+                    data = {
+                        **data,
+                        "previous_attempt_words": len(outputs[index]["text"].split()),
+                        "note": "Your previous draft of this section was too short. "
+                        f"Write about {section_target(sections[index])} words that "
+                        "cover the section purpose.",
+                    }
+                requests.append((instructions, data, ScriptSection))
+            results = await self.llm_batch("script", job, requests)
+            provenance = results[0]["provenance"]
+            for index, result in zip(pending, results):
+                self.check_claim_ids(result, verified)
+                outputs[index] = result
+            pending = [
+                index
+                for index in pending
+                if len(outputs[index]["text"].split()) < section_floor(sections[index])
+            ]
+            if not pending:
+                break
+        if pending:
+            index = pending[0]
+            section = sections[index]
+            raise ReviewRequired(
+                f"Section {index + 1} '{section['title']}' has "
+                f"{len(outputs[index]['text'].split())} words but is planned for "
+                f"~{int(section['estimated_seconds'])} s (at least "
+                f"{section_floor(section)} words expected) after "
+                f"{SCRIPT_RETRY_ROUNDS + 1} attempts; the generation looks truncated "
+                "or off-task. Review the outline or restart the job."
+            )
+        script = assemble_script(
+            [
+                {"title": section["title"], **output}
+                for section, output in zip(sections, outputs)
+            ]
+        )
+        return {**script, "provenance": provenance}
+
+    async def rewrite(self, job, draft, critics, verified):
+        """Revise a draft one section per request; a draft without sections is
+        one part measured against the whole outline."""
+        parts = script_parts(draft)
+        outline = output_for(job, "outline").get("sections", [])
+        if len(outline) == len(parts):
+            sections = outline
+        else:
+            total = sum(section["estimated_seconds"] for section in outline)
+            sections = [
+                {
+                    "title": part["title"],
+                    "claim_ids": [],
+                    "estimated_seconds": total / len(parts),
+                }
+                for part in parts
+            ]
+        required = {
+            name: critic["required_changes"]
+            for name, critic in critics.items()
+            if critic["required_changes"]
+        }
+
+        def rewrite_request(index, section):
+            return with_series(
+                job,
+                "script",
+                "Revise ONE section of the narration to address the required changes "
+                "that apply to it. Keep its length close to the original unless a "
+                "change asks otherwise. Use only the verified claims. Return the "
+                "revised text and the claim ids used.",
+                {
+                    "section_number": index + 1,
+                    "section_count": len(parts),
+                    "draft": parts[index],
+                    "required_changes": required,
+                    "verified_claims": claims_for(section, verified),
+                },
+            )
+
+        result = await self.write_sections(job, sections, verified, rewrite_request)
+        self.check_script_length(job, result)
+        return result
 
     async def storyboard(self, job, assets):
         """Plan scenes over numbered script sentences in bounded chunks, then
@@ -410,22 +560,39 @@ class LocalProvider:
             self.check_claim_ids(result, verified)
             return result
         if stage == "script":
-            result = await self.llm(
-                stage,
-                job,
-                *with_series(
+            sections = output_for(job, "outline").get("sections", [])
+            if not sections:
+                raise ReviewRequired("Script needs a completed outline")
+            summary = [
+                {"title": section["title"], "purpose": section["purpose"]}
+                for section in sections
+            ]
+
+            def script_request(index, section):
+                return with_series(
                     job,
                     stage,
-                    "Write natural spoken narration using ONLY these verified claims and outline. No greetings, fabricated facts, or generic intros. Return all claim ids used.",
+                    "Write natural spoken narration for ONE outline section using ONLY "
+                    "the supplied verified claims. Aim for about target_words words. "
+                    "Do not repeat or summarise other sections; no greetings, "
+                    "fabricated facts, or sign-offs unless this is the first or last "
+                    "section. Return the section text and the claim ids used.",
                     {
                         **brief,
-                        "verified_claims": verified,
-                        "outline": output_for(job, "outline"),
+                        "section_number": index + 1,
+                        "section_count": len(sections),
+                        "section": {
+                            "title": section["title"],
+                            "purpose": section["purpose"],
+                            "estimated_seconds": section["estimated_seconds"],
+                            "target_words": section_target(section),
+                        },
+                        "outline": summary,
+                        "verified_claims": claims_for(section, verified),
                     },
-                ),
-                Script,
-            )
-            self.check_claim_ids(result, verified)
+                )
+
+            result = await self.write_sections(job, sections, verified, script_request)
             self.check_script_length(job, result)
             return result
         if stage == "critique":
@@ -474,27 +641,7 @@ class LocalProvider:
                 ):
                     return {"score": score, "approved_script": draft, "rounds": rounds}
                 if iteration + 1 < governor.critique_rounds:
-                    draft = await self.llm(
-                        "script",
-                        job,
-                        *with_series(
-                            job,
-                            "script",
-                            "Revise the narration to address every required change. Use only the verified claims. Return the revised text and used claim ids.",
-                            {
-                                "draft": script_body(draft),
-                                "required_changes": {
-                                    name: critic["required_changes"]
-                                    for name, critic in critics.items()
-                                    if critic["required_changes"]
-                                },
-                                "verified_claims": verified,
-                            },
-                        ),
-                        Script,
-                    )
-                    self.check_claim_ids(draft, verified)
-                    self.check_script_length(job, draft)
+                    draft = await self.rewrite(job, draft, critics, verified)
             artifact = self.artifacts.put_json(
                 job["id"], {"rounds": rounds, "last_draft": draft}
             )

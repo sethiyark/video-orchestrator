@@ -44,7 +44,7 @@ Prefer domain models (`Research`, `Verification`, `Outline`, …) over `data: di
 | Fact verifier | QUALITY | retrieve_sources (no web unless configured) | verified / rejected claims |
 | Content angle | QUALITY | retrieve_verified_claims, retrieve_memory | angle JSON |
 | Outline | QUALITY | claims, angle, memory | sections |
-| Script writer | QUALITY | verified claims, outline, angle, memory | narration script |
+| Script writer | QUALITY, one request per outline section | verified claims, outline, angle, memory | narration script (sections joined) |
 | Critics (5) | QUALITY, separate prompts | script, claims, memory, similarity scores | structured scores |
 | Similarity engine | embeddings, no generative LLM | embed, retrieve corpus | similarity JSON |
 | Storyboard | QUALITY | script, scene schemas | scene list (closed component enum) |

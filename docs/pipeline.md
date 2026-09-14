@@ -34,14 +34,29 @@ Critique: `governor.critique_rounds` rounds; each round is one batch of five
 critics (`CRITICS`, seeds `42+i`, `governor.critic_temperature`), aggregated
 by the **minimum** score; any `required_changes` blocks. Critics and the
 rewrite see only the draft's `text` and `claim_ids` (`script_body`), never its
-provenance/artifact fields. The rewrite prompt receives the draft, the
-verified claims, and only the critics' `required_changes`.
+provenance/artifact fields. The rewrite (`LocalProvider.rewrite`) goes
+through `write_sections` over the draft's stored `sections` (a draft without
+`sections` is one part measured against the whole outline): each request
+carries that section's draft, all critics' `required_changes`, and the
+section's verified claims, and asks for a revised `ScriptSection`.
 
-Script length: `check_script_length` runs on the script stage and on every
-critique rewrite. A script with fewer than
-`outline seconds × WORDS_PER_SECOND (2.5) × MIN_SCRIPT_COVERAGE (0.25)` words
-raises `ReviewRequired` as truncated or off-task, so a broken draft never
-reaches the critics. Skipped when there is no outline.
+Script: the stage requires a completed outline (`ReviewRequired` otherwise)
+and writes narration one `ScriptSection` request per outline section in one
+model load (`write_sections`). Each request receives the brief, its
+`section_number`/`section_count`, the section (`title`, `purpose`,
+`estimated_seconds`, `target_words = estimated_seconds × WORDS_PER_SECOND`),
+the outline's titles/purposes, and only the verified claims the section
+cites (`claims_for`; all claims if it cites none). Sections are generated
+independently, so a long script never depends on one `max_tokens` budget. A
+section with fewer than `target_words × MIN_SCRIPT_COVERAGE (0.25)` words is
+re-asked in `SCRIPT_RETRY_ROUNDS` (1) further batches that contain only the
+short sections plus `previous_attempt_words` and a note with the target;
+one still short afterwards raises `ReviewRequired` naming the section.
+`assemble_script` joins sections with blank lines, unions `claim_ids` in
+order, validates the whole as `Script`, and keeps `sections`
+(`title`/`text`/`claim_ids`) in the output next to `text`/`claim_ids`.
+`check_script_length` (whole script vs `outline seconds × 2.5 × 0.25`) still
+runs on the script stage and every rewrite.
 
 Storyboard: the script is split into sentences (`SENTENCE_SPLIT`, the
 narration runtime's boundaries) and planned in chunks of
