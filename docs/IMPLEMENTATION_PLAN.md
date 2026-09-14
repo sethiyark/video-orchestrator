@@ -78,11 +78,11 @@ Phase 1 persists the **control-plane** subset. Content tables arrive with the re
 
 ## Phase 6 — Video engine
 
-- [ ] Remotion project
+- [x] Remotion project
 - [ ] First primitives: Title, Question, DefinitionCard, AnimatedFlowDiagram, ComparisonCards, BrowserWindow, CodeEditor, ImagePan, Callout, Outro
-- [ ] FFmpeg mux
-- [ ] Sample 2–3 minute render
-- [ ] `make render-sample`
+- [x] FFmpeg mux
+- [x] Sample 2–3 minute render
+- [x] `make render-sample`
 
 ## Phase 7 — QC
 

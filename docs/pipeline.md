@@ -15,8 +15,13 @@ integrations.
 `ReviewRequired(message, details, rewind_to=None)` (evidence/config; no
 worker retry). With `rewind_to` naming an earlier stage, the worker may send
 the job back to that stage with `details` as corrections instead of stopping
-(see [providers.md](providers.md), Governor `max_rewinds`). Today only critique
-sets it (`rewind_to="script"`). `IntegrationUnavailable` (render/upload). `config_hash` fingerprints YAML + cached revisions; `stage_hashes` fingerprints,
+(see [providers.md](providers.md), Governor `max_rewinds`). Validation failures now name the same or an earlier stage. Research,
+verification, outline, script, storyboard, metadata and schema errors retry
+locally with `validation_feedback` in the prompt and an offset sampling seed.
+Assets rewind to storyboard; similarity rewinds to script; critique retains
+its existing script rewrite loop. All repairs use the existing Governor
+`max_rewinds` limit and leave policy thresholds unchanged. Missing integrations
+and model installations still require operator action. `IntegrationUnavailable` (render/upload). `config_hash` fingerprints YAML + cached revisions; `stage_hashes` fingerprints,
 per stage, the route, that role's spec, its cached revision (and
 `images_enabled` for assets). A changed config never blocks a job: the worker
 records it on the job and continues (see [providers.md](providers.md)); every
@@ -35,7 +40,8 @@ storyboard (closed component enum: `DefinitionCard`, `AnimatedFlowDiagram`,
 `BulletReveal`, `ImagePan`, `SeriesAsset`), assets (optional images; pins
 `SeriesAsset` references by sha256), narration,
 alignment, similarity (cosine vs prior completed similarity JSON), metadata.
-`render` and `upload` raise `IntegrationUnavailable`.
+`render` consumes these artifacts through [Remotion/FFmpeg](rendering.md).
+`upload` raises `IntegrationUnavailable`.
 
 Critique: `governor.critique_rounds` rounds; each round is one batch of five
 critics (`CRITICS`, seeds `42+i`, `governor.critic_temperature`), aggregated
@@ -95,9 +101,21 @@ sets `duration_seconds = max(words / 2.5, 2)`, and validates the assembled
 `Storyboard` (a violation such as >120 scenes or a >60 s scene is
 `ReviewRequired`).
 
+Narration validates that the generated WAV is readable and nonempty before
+adopting it. Invalid audio requests regeneration.
+
 Alignment: the runner receives the audio path **and the narration text**. The
 output must carry `fidelity`; below `governor.min_narration_fidelity` the stage
-raises `ReviewRequired` with `{method, fidelity}` details.
+raises `ReviewRequired` with `{method, fidelity}` details and rewinds to narration.
+After fidelity passes, the renderer's exact token and timestamp contract is
+validated against the WAV duration. If ASR words differ, exact TTS sentence
+segments may supply timing, but only if they pass that same contract. The output
+records `timing_method=tts_sentence_interpolation` and `timing_repair`; the
+independent fidelity score and method are retained. This is approximate timing,
+not forced word alignment. If neither timing source validates, narration is
+regenerated within the rewind budget. Stale narration text rewinds to narration;
+a storyboard whose text differs from narration rewinds to storyboard. Render also checks persisted alignment
+from older runs before launching Remotion and requests repair when necessary.
 
 Series jobs: outline, script, critique, storyboard, and metadata prompts
 receive the stage's slice of the job's `series_context` as a `series` data
@@ -151,6 +169,5 @@ incomplete stage.
 ## Known limitations
 
 No web search. Similarity vs all prior jobs with similarity output, not
-published-only. No renderer consumes `SeriesAsset` scenes. Storyboard retiming after alignment is not applied to a
-renderer yet. Token estimation is a character heuristic, not the model's
+published-only. Segment-only render timing interpolates words within segments. Token estimation is a character heuristic, not the model's
 tokenizer.

@@ -7,12 +7,16 @@ import math
 import re
 import tempfile
 import unicodedata
+import wave
 from pathlib import Path
+
+from pydantic import ValidationError
 
 from .artifacts import Artifacts
 from .config import CUDA_ONLY_RUNTIMES
 from .models.hub import ModelHub, ModelNotReady
 from .models.runner import LocalRunner
+from .rendering import RemotionRenderer, RenderError, timeline, words
 from .schemas import (
     MAX_SCENE_SENTENCES,
     Critic,
@@ -67,7 +71,7 @@ SERIES_RULE = (
 
 
 class ReviewRequired(ValueError):
-    """A stage cannot pass without a change. ``rewind_to`` names an earlier
+    """A stage cannot pass without a change. ``rewind_to`` names the same or an earlier
     stage the worker may re-run with ``details`` as corrections (Governor
     ``max_rewinds``); without it the job stops for human review."""
 
@@ -277,6 +281,7 @@ class LocalProvider:
         self.settings = settings
         self.store = store
         self.runner = runner or LocalRunner(settings)
+        self.renderer = RemotionRenderer()
         self.artifacts = Artifacts(settings.artifact_dir)
         self.library = SeriesLibrary(store.engine)
         # Set by execute(); offsets default LLM seeds so a worker-level retry of a
@@ -349,6 +354,10 @@ class LocalProvider:
         """One child, one model load, many JSON requests: (instructions, data, schema[, seed])."""
         payload = []
         for instructions, data, schema, *options in requests:
+            corrections = (job.get("corrections") or {}).get(stage)
+            if corrections:
+                data = {**data, "validation_feedback": corrections}
+                instructions += " Correct the prior validation failure in validation_feedback."
             self.budget(stage, data)
             payload.append(
                 {
@@ -688,11 +697,76 @@ class LocalProvider:
         return {**storyboard, "provenance": results[0]["provenance"]}
 
     async def execute(self, stage, job, attempt: int = 0):
-        self._attempt = attempt
-        result = await self._execute(stage, job)
+        corrections = (job.get("corrections") or {}).get(stage) or {}
+        self._attempt = attempt + corrections.get("attempt", 0)
+        try:
+            result = await self._execute(stage, job)
+        except ValidationError as exc:
+            raise ReviewRequired(
+                f"Generated output failed schema validation: {exc}",
+                {"validation_errors": str(exc)}, rewind_to=stage,
+            ) from exc
+        except ReviewRequired as exc:
+            # Existing Governor rewind budget bounds validation repair, including
+            # retries of the current stage. Policy thresholds are never relaxed.
+            targets = {
+                "research": "research", "verification": "verification",
+                "outline": "outline", "script": "script",
+                "storyboard": "storyboard", "assets": "storyboard",
+                "narration": "narration", "alignment": "alignment",
+                "similarity": "script", "metadata": "metadata",
+            }
+            if exc.rewind_to is None:
+                exc.rewind_to = targets.get(stage)
+            raise
         result["provider"] = "local"
         result["artifact"] = self.artifacts.put_json(job["id"], result)
         return result
+
+    def validate_alignment(self, job: dict, response: dict) -> dict:
+        """Check the actual render contract before accepting alignment output."""
+        score = response.get("fidelity")
+        if not isinstance(score, (float, int)) or not math.isfinite(score) or (
+            score < self.config.governor.min_narration_fidelity
+        ):
+            raise ReviewRequired("Alignment needs passing narration fidelity", rewind_to="alignment")
+        narration = output_for(job, "narration")
+        if not narration.get("text") or not narration.get("audio"):
+            raise ReviewRequired("Alignment needs narration audio and text", rewind_to="narration")
+        scenes = output_for(job, "storyboard").get("scenes") or [
+            {"narration_text": narration["text"]}
+        ]
+        script = current_script(job).get("text")
+        if script and words(script) != words(narration["text"]):
+            raise ReviewRequired("Narration text is stale", rewind_to="narration")
+        if words(" ".join(scene["narration_text"] for scene in scenes)) != words(narration["text"]):
+            raise ReviewRequired("Storyboard narration is stale", rewind_to="storyboard")
+        try:
+            audio = self.artifacts.resolve(job["id"], narration["audio"]["id"])
+            with wave.open(str(audio)) as wav:
+                duration = wav.getnframes() / wav.getframerate()
+        except (OSError, EOFError, wave.Error, ValueError) as exc:
+            raise ReviewRequired("Narration must be a valid WAV", rewind_to="narration") from exc
+        try:
+            timeline(scenes, response, duration)
+            return response
+        except (KeyError, TypeError, ValueError) as exc:
+            # TTS records exact sentence boundaries while concatenating audio.
+            # Use those only after independent fidelity has passed, and subject
+            # them to precisely the same text/timestamp checks as the ASR output.
+            repaired = {
+                **response,
+                "segments": narration.get("segments", []),
+                "timing_method": "tts_sentence_interpolation",
+                "timing_repair": str(exc),
+            }
+            try:
+                timeline(scenes, repaired, duration)
+            except (KeyError, TypeError, ValueError):
+                raise ReviewRequired(
+                    f"Alignment is not renderable: {exc}", rewind_to="narration"
+                ) from exc
+            return repaired
 
     async def _execute(self, stage, job):
         brief = {"title": job["title"], "brief": job["brief"]}
@@ -946,6 +1020,12 @@ class LocalProvider:
                     {"text": text, "output_path": str(path)},
                     job["id"],
                 )
+                try:
+                    with wave.open(str(path)) as wav:
+                        if wav.getnframes() <= 0:
+                            raise ValueError("empty audio")
+                except (OSError, EOFError, wave.Error, ValueError) as exc:
+                    raise ReviewRequired("Narration produced invalid or empty WAV audio") from exc
                 return {
                     **response,
                     "text": text,
@@ -980,7 +1060,9 @@ class LocalProvider:
                     f"Narration fidelity {score:.2f} is below the governor minimum "
                     f"{self.config.governor.min_narration_fidelity:.2f}; the audio does not match the script. Re-run narration or review the audio.",
                     {"method": response.get("method"), "fidelity": score},
+                    rewind_to="narration",
                 )
+            response = self.validate_alignment(job, response)
             return response
         if stage == "similarity":
             response = await self.runner.run(
@@ -1035,9 +1117,17 @@ class LocalProvider:
                 Metadata,
             )
         if stage == "render":
-            raise IntegrationUnavailable(
-                "Local model stages finished. Remotion/FFmpeg rendering is not connected yet; artifacts are available for review. No video was rendered."
-            )
+            alignment = output_for(job, "alignment")
+            # Old persisted outputs may predate the alignment validation gate.
+            validated = self.validate_alignment(job, alignment)
+            if validated != alignment:
+                raise ReviewRequired(
+                    "Alignment needs validated sentence timing", rewind_to="alignment"
+                )
+            try:
+                return await self.renderer.render(job, self.artifacts, self.library)
+            except RenderError as exc:
+                raise IntegrationUnavailable(str(exc)) from exc
         if stage == "upload":
             raise IntegrationUnavailable(
                 "YouTube upload is not connected. Human approval remains required."

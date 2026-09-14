@@ -17,7 +17,7 @@ Served at `GET /api/jobs/{id}/artifacts/{artifact_id}`.
 
 ## How it is called
 
-`LocalProvider` after stage outputs (JSON, WAV, optional PNG).
+`LocalProvider` after stage outputs (JSON, WAV, optional PNG, rendered MP4).
 
 ## Invariants
 

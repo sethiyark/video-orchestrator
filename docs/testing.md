@@ -11,9 +11,10 @@ no Hugging Face download, no live Temporal.
 
 | File | Owns |
 | --- | --- |
-| `test_pipeline.py` | Mock worker, approval, retry, restart, interrupt recovery, retry attempt index reaches the provider |
-| `test_local_provider.py` | Grounding (per-source research, tolerant quote location, quote retry), critics (script-only input), storyboard schema and sentence chunks, unverified claims, per-section script chunks and short-section retry, retry-attempt seed offset |
+| `test_pipeline.py` | Mock worker, approval, retry, restart, interrupt recovery, retry attempt index reaches the provider, bounded same-stage validation rewinds |
+| `test_local_provider.py` | Grounding (per-source research, tolerant quote location, quote retry), critics (script-only input), storyboard schema and sentence chunks, unverified claims, per-section script chunks and short-section retry, retry-attempt seed offset, alignment repair with TTS timing and narration rewinds |
 | `test_local_api.py` | Local artifacts, render boundary, config-hash restart |
+| `test_rendering.py` | Alignment timing, media validation, subprocess failures and MP4 adoption |
 | `test_models.py` | Config/device rules, profiles, hub pin + extras, GPU queue, runner kill, child stderr on abort |
 | `test_runtime.py` | Inference child with fake llama.cpp/whisper: batch, repair, truncation retry, leaked-reasoning rejection, grammar bounds, Metal layers, fidelity, WER, parent-pid JSON |
 | `test_database.py` | Legacy import, locks; Postgres if `TEST_DATABASE_URL` |

@@ -154,11 +154,11 @@ caption}`) may only reference active image/logo assets in the job's series:
 - `test_series_asset_scene_is_validated_and_pinned`
 - `test_standalone_storyboard_forbids_series_assets`
 
+The [renderer](rendering.md) verifies pinned `SeriesAsset` hashes before staging media.
+
 ## Known limitations
 
 - Job↔series filtering scans job `context` JSON in Python; there is no index.
-- No renderer consumes `SeriesAsset` scenes yet (see
-  [pipeline.md](pipeline.md)).
 - No semantic search over ideas, glossary or sources.
 - Assets are archived, never hard-deleted. Deleting a series drops its library
   rows but leaves the bytes in the object store.

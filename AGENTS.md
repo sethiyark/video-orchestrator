@@ -135,4 +135,4 @@ Owning tests live in [`backend/tests/`](backend/tests/). Details: [`docs/invaria
 
 ## Known limitations (deliberate)
 
-No Remotion renderer, no YouTube adapter, no discovery search, no pgvector similarity store yet, no dashboard auth. Do not “fix” a documented limitation as a side effect of another change.
+No YouTube adapter, no discovery search, no pgvector similarity store yet, no dashboard auth. Do not “fix” a documented limitation as a side effect of another change.

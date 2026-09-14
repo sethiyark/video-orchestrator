@@ -5,7 +5,7 @@ from copy import deepcopy
 import pytest
 
 from app.config import Settings
-from app.local_provider import IntegrationUnavailable, LocalProvider, ReviewRequired
+from app.local_provider import LocalProvider, ReviewRequired
 from app.schemas import Storyboard
 from app.store import Store
 
@@ -358,7 +358,13 @@ def narration_job(tmp_path, alignment):
     folder = provider.artifacts.folder(job["id"])
     folder.mkdir(parents=True, exist_ok=True)
     audio = folder / "narration.wav"
-    audio.write_bytes(b"RIFF")
+    import wave
+
+    with wave.open(str(audio), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(24000)
+        wav.writeframes(b"\x00\x00" * 24000)
     complete(
         job,
         "narration",
@@ -388,7 +394,7 @@ def test_alignment_passes_with_fidelity_and_sends_script(tmp_path):
     provider, runner, job = narration_job(
         tmp_path,
         {
-            "segments": [{"text": "DNS maps names", "start": 0, "end": 1}],
+            "segments": [{"text": "DNS maps names to addresses.", "start": 0, "end": 1}],
             "method": "forced_alignment",
             "fidelity": 0.93,
         },
@@ -419,7 +425,7 @@ def test_scene_schema_rejects_arbitrary_code_and_live_render_is_explicit(tmp_pat
             }
         )
     provider, _, job = setup(tmp_path, [])
-    with pytest.raises(IntegrationUnavailable, match="not connected"):
+    with pytest.raises(ReviewRequired, match="fidelity"):
         asyncio.run(provider.execute("render", job))
 
 
@@ -712,3 +718,60 @@ def test_script_without_corrections_keeps_its_prompt(tmp_path):
     assert "failed independent critics" not in request["messages"][0]["content"]
     payload = json.loads(request["messages"][1]["content"])
     assert "required_changes" not in payload and "previous_attempt" not in payload
+
+
+def test_alignment_repairs_asr_text_using_validated_tts_segments(tmp_path):
+    provider, _, job = narration_job(tmp_path, {
+        "segments": [{"text": "DNS maps names to address", "start": 0, "end": 1}],
+        "method": "asr_transcript", "fidelity": 0.99,
+    })
+    narration = next(s["output"] for s in job["stages"] if s["name"] == "narration")
+    narration["segments"] = [{"text": narration["text"], "start": 0, "end": 1}]
+    result = asyncio.run(provider.execute("alignment", job))
+    assert result["segments"] == narration["segments"]
+    assert result["timing_method"] == "tts_sentence_interpolation"
+    assert result["fidelity"] == 0.99
+
+
+@pytest.mark.parametrize("end", [1, 2])
+def test_alignment_without_valid_repair_rewinds_narration(tmp_path, end):
+    provider, _, job = narration_job(tmp_path, {
+        "segments": [{"text": "wrong words", "start": 0, "end": end}],
+        "fidelity": 0.99,
+    })
+    with pytest.raises(ReviewRequired, match="not renderable") as error:
+        asyncio.run(provider.execute("alignment", job))
+    assert error.value.rewind_to == "narration"
+
+
+def test_validation_retry_prompt_includes_feedback_and_changes_seed(tmp_path):
+    provider, runner, job = setup(tmp_path, [{"title": "DNS", "description": "DNS explained", "tags": ["DNS"]}])
+    complete(job, "script", {"text": "DNS explained", "claim_ids": []})
+    job["corrections"] = {"metadata": {"attempt": 1, "message": "Missing title"}}
+    asyncio.run(provider.execute("metadata", job))
+    request = runner.calls[0][1]["requests"][0]
+    assert request["seed"] == 43
+    assert json.loads(request["messages"][1]["content"])["validation_feedback"]["message"] == "Missing title"
+
+
+def test_stale_storyboard_rewinds_to_storyboard(tmp_path):
+    provider, _, job = narration_job(tmp_path, {
+        "segments": [{"text": "DNS maps names to addresses.", "start": 0, "end": 1}],
+        "fidelity": 1.0,
+    })
+    complete(job, "storyboard", {"scenes": [{"narration_text": "Old script."}]})
+    with pytest.raises(ReviewRequired, match="Storyboard narration is stale") as error:
+        asyncio.run(provider.execute("alignment", job))
+    assert error.value.rewind_to == "storyboard"
+
+
+def test_tts_timing_cannot_bypass_fidelity(tmp_path):
+    provider, _, job = narration_job(tmp_path, {
+        "segments": [{"text": "garbled", "start": 0, "end": 1}],
+        "fidelity": 0.1,
+    })
+    narration = next(s["output"] for s in job["stages"] if s["name"] == "narration")
+    narration["segments"] = [{"text": narration["text"], "start": 0, "end": 1}]
+    with pytest.raises(ReviewRequired, match="fidelity") as error:
+        asyncio.run(provider.execute("alignment", job))
+    assert error.value.rewind_to == "narration"

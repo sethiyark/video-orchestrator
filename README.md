@@ -148,13 +148,13 @@ Local jobs require source URLs and excerpts. The UI accepts one source; the API 
 
 Accuracy, retention, clarity, originality, and style critics use separate prompts and seeds but share one model load per round. The minimum critic score and unresolved required changes determine acceptance; rewrites see only the required changes. Revision loops are bounded by `critique_rounds`. Inputs that cannot fit the model context stop with a review message before any model runs. Corpus similarity uses normalized embeddings from the same model configuration and revision; it currently compares against all prior jobs with completed similarity outputs, not only published videos.
 
-Storyboards accept a closed JSON schema: `DefinitionCard`, `AnimatedFlowDiagram`, `BulletReveal`, optional `ImagePan`, and `SeriesAsset` (an existing series image or logo, by id). They cannot contain arbitrary renderer code. Kokoro (or Qwen3-TTS) produces a concatenated WAV with chunk boundaries; alignment produces segment and word timestamps plus a fidelity score against the script, and stops the job for review when the audio does not match the narration. Final scene retiming remains a renderer integration task.
+Storyboards accept a closed JSON schema: `DefinitionCard`, `AnimatedFlowDiagram`, `BulletReveal`, optional `ImagePan`, and `SeriesAsset` (an existing series image or logo, by id). They cannot contain arbitrary renderer code. Kokoro (or Qwen3-TTS) produces a concatenated WAV with chunk boundaries; alignment produces segment and word timestamps plus a fidelity score against the script, and stops the job for review when the audio does not match the narration. The renderer retimes scenes using alignment and the actual WAV duration.
 
 Stage JSON and media are saved under `ARTIFACT_DIR` (default `backend/data/artifacts`) with content hashes and model provenance. Inspect stage JSON and download narration in the dashboard. API endpoints include:
 
 - `GET /api/models`: configured roles, routes, cache state, and inference queue.
 - `GET /api/jobs/{id}/attempts`: attempt history and review artifacts on critic failure.
-- `GET /api/jobs/{id}/artifacts/{artifact_id}`: saved JSON, WAV, or PNG files.
+- `GET /api/jobs/{id}/artifacts/{artifact_id}`: saved JSON, WAV, PNG, or MP4 files.
 
 ## Series
 
@@ -177,7 +177,7 @@ Database support and local model adapters are implemented. The full autonomous o
 - No Temporal **video** workflow yet (Phase 1 starts Temporal with a health canary only). No discovery/search connectors, external LLM escalation, YouTube analytics, or publishing scheduler yet.
 - MinIO and Redis run in Compose; local `uvicorn` still defaults to disk artifacts and no Redis.
 - pgvector is installed in the Compose Postgres image; similarity still uses application-side cosine on JSON embeddings until Phase 4.
-- No Remotion/FFmpeg renderer or YouTube OAuth/upload adapter yet. In local mode, the job stops at `render` with a clear error after model artifacts are generated. It never reports a nonexistent render or sends an upload.
+- Run `make setup-renderer` to install the local Remotion/FFmpeg renderer and Chrome, then `make render-sample` for a two-minute sample. Local jobs produce H.264/AAC MP4 artifacts at the render stage. See [rendering](docs/rendering.md). No YouTube OAuth/upload adapter is connected; approval remains required.
 - The human approval gate remains mandatory. A real upload integration must bind approval to an exact rendered artifact and add idempotent upload recovery.
 - No authentication. Keep the API bound to localhost for development.
 

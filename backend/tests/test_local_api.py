@@ -2,7 +2,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 from test_pipeline import wait
@@ -11,6 +11,7 @@ from app.config import Settings
 from app.local_provider import LocalProvider
 from app.main import create_app
 from app.providers import STAGES
+from app.rendering import RenderError
 from app.store import Store
 
 
@@ -34,7 +35,7 @@ class PipelineFixtureRunner:
             assert Path(payload["audio_path"]).exists()
             assert payload["text"]
             return {
-                "segments": [{"text": "DNS maps names", "start": 0, "end": 1}],
+                "segments": [{"text": payload["text"], "start": 0, "end": 1}],
                 "method": "asr_transcript",
                 "fidelity": 0.97,
                 "provenance": provenance,
@@ -111,6 +112,9 @@ def test_local_pipeline_artifacts_and_explicit_render_boundary(tmp_path):
     settings.cache_dir = tmp_path / "models"
     path = str(tmp_path / "jobs.db")
     provider = LocalProvider(settings, Store(path), PipelineFixtureRunner())
+    provider.renderer.render = AsyncMock(
+        side_effect=RenderError("Remotion/FFmpeg unavailable in this offline fixture")
+    )
     with TestClient(create_app(path, provider, settings)) as client:
         assert (
             client.post("/api/jobs", json={"title": "No evidence"}).status_code == 422
@@ -398,3 +402,50 @@ def test_config_change_is_recorded_and_job_continues(tmp_path, monkeypatch):
         assert client.post(f"/api/jobs/{legacy['id']}/run").status_code == 200
         (change,) = client.get(f"/api/jobs/{legacy['id']}").json()["config_changes"]
         assert change["pending_stages_affected"] == STAGES
+
+
+def test_local_render_success_reaches_approval_and_serves_video(tmp_path):
+    settings = Settings()
+    settings.mode = "local"
+    settings.artifact_dir = tmp_path / "artifacts"
+    settings.cache_dir = tmp_path / "models"
+    path = str(tmp_path / "jobs.db")
+    provider = LocalProvider(settings, Store(path), PipelineFixtureRunner())
+
+    async def fake_render(job, artifacts, library):
+        media = artifacts.folder(job["id"]) / "fixture.mp4"
+        media.write_bytes(b"offline renderer fixture")
+        return {"video": artifacts.adopt(job["id"], media)}
+
+    provider.renderer.render = fake_render
+    with TestClient(create_app(path, provider, settings)) as client:
+        job = client.post(
+            "/api/jobs",
+            json={
+                "title": "DNS",
+                "sources": [
+                    {
+                        "id": "s1",
+                        "url": "https://example.com",
+                        "title": "DNS reference",
+                        "excerpt": "DNS maps domain names to IP addresses.",
+                    }
+                ],
+            },
+        ).json()
+        client.post(f"/api/jobs/{job['id']}/run")
+        ready = wait(client, job["id"], "awaiting_approval")
+        render = next(
+            stage["output"] for stage in ready["stages"] if stage["name"] == "render"
+        )
+        assert (
+            client.get(
+                f"/api/jobs/{job['id']}/artifacts/{render['video']['id']}"
+            ).content
+            == b"offline renderer fixture"
+        )
+        assert ready["approved_at"] is None
+        assert ready["stages"][-1]["status"] == "pending"
+        assert client.post(f"/api/jobs/{job['id']}/approve").status_code == 200
+        failed = wait(client, job["id"], "failed")
+        assert "YouTube upload is not connected" in failed["error"]

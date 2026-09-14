@@ -1,4 +1,4 @@
-.PHONY: setup system-deps dev dev-api dev-ui dev-local-mac dev-local-cuda test worker dashboard lint format render-sample run-sample-pipeline demo-script test-llm
+.PHONY: setup system-deps dev dev-api dev-ui dev-local-mac dev-local-cuda test worker dashboard lint format setup-renderer render-sample run-sample-pipeline demo-script test-llm
 
 setup: system-deps
 	cd backend && uv sync --group dev --extra llm --extra audio --extra embeddings --extra images
@@ -69,8 +69,11 @@ worker:
 
 dashboard: dev-ui
 
+setup-renderer:
+	cd renderer && pnpm install --frozen-lockfile && pnpm setup-browser
+
 render-sample:
-	@echo "Phase 6: Remotion sample render is not implemented yet"
+	cd backend && uv run python -m app.render_sample
 
 run-sample-pipeline:
 	@echo "Phase 3–7: DNS sample pipeline is not implemented yet"
