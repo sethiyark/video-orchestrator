@@ -220,6 +220,31 @@ function ProductionDetail() {
                 </p>
               )}
               {promoted && <p className="review-note">{promoted}</p>}
+              {current.config_changes?.length ? (
+                <p className="review-note">
+                  Model configuration changed{" "}
+                  {current.config_changes.length > 1
+                    ? `${current.config_changes.length} times`
+                    : ""}{" "}
+                  since this video was created; the pipeline continues with the
+                  current models.{" "}
+                  {current.config_changes.at(-1)!.pending_stages_affected.length
+                    ? `Stages affected by the latest change: ${current.config_changes
+                        .at(-1)!
+                        .pending_stages_affected.map(label)
+                        .join(", ")}.`
+                    : "No pending stage runs on a different model."}
+                </p>
+              ) : null}
+              {Object.entries(current.corrections ?? {}).map(
+                ([target, correction]) => (
+                  <p key={target} className="review-note">
+                    {label(correction.from_stage)} sent the job back to{" "}
+                    {label(target)} with corrections (attempt {correction.attempt}
+                    ): {correction.message}
+                  </p>
+                ),
+              )}
               <div className="stages">
                 {current.stages.map((stage, index) => (
                   <details key={stage.name}>
