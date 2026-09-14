@@ -95,11 +95,23 @@ button (name via `window.prompt`) that POSTs
 `lib/api.ts` adds series types, `apiSend` (PUT/PATCH JSON), `apiUpload` (raw
 file body), `assetUrl`, and flattens FastAPI validation errors into
 `field: message` strings. Actions POST `/jobs/{id}/run`, `/restart` (clears
-stages and rebases `config_hash`), and `/approve`. Narration download via
-`artifactUrl`. A job with `config_changes` shows a note that the pipeline
+stages and rebases `config_hash`), `/approve`, and (via `submitManualResponse`,
+typed by `ManualStageOutput`) `/jobs/{id}/stages/{stage}/manual-response`.
+Narration download via `artifactUrl`. A job with `config_changes` shows a note that the pipeline
 continues on the current models and which pending stages the latest change
 affects; a job with `corrections` shows which stage sent it back and why.
 `configChanged` (`lib/format.ts`) still matches legacy error text.
+
+Manual stage input: when a stage is `awaiting_input` (job
+`awaiting_manual_input` — a stage routed to `"manual"` in
+[pipeline.md](../docs/pipeline.md#manual-routing-human-relay)), its
+`<details>` panel shows the pasted-response round number, the composed
+prompt (`stage.output.manual.prompt`) in a `<pre>` with a "Copy prompt"
+button (`navigator.clipboard.writeText`), a paste-back `<textarea>`, and a
+"Submit reply" button that POSTs `/jobs/{id}/stages/{stage}/manual-response`
+via `submitManualResponse` (`lib/api.ts`) and invalidates `["jobs"]` on
+success, clearing the draft. A 400 (malformed paste) surfaces through the
+same shared error block as the other job actions; the job stays parked.
 
 Delete: `apiDelete` (`lib/api.ts`) issues `DELETE /jobs/{id}` (no JSON body on
 204 success). Available in two places, both gated by a `window.confirm`

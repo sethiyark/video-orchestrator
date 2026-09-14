@@ -49,6 +49,12 @@ tests.
 - Series uploads accept only allowlisted media whose bytes match the declared
   type (no SVG/HTML) and are served as attachments.
 - Writer/research tool allowlists: see [logical-agents.md](logical-agents.md).
+- A stage routed to `"manual"` gets no elevated trust for its human-pasted
+  reply: it passes the same pydantic schema validation and downstream checks
+  (claim references, script length, critic score/`required_changes`) as
+  model output. No credentials are involved — the app never talks to
+  Claude/Gemini itself, only the user's own browser tab does
+  ([pipeline.md](pipeline.md#manual-routing-human-relay)).
 
 ## HTTP and secrets
 
@@ -65,4 +71,4 @@ same change.
 
 `test_pipeline.py`, `test_local_provider.py`, `test_local_api.py`,
 `test_models.py`, `test_runtime.py`, `test_database.py`, `test_control_plane.py`,
-`test_series.py`.
+`test_series.py`, `test_manual.py`, `test_config.py`.

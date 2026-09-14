@@ -55,10 +55,21 @@ job's stored `stage_hashes`; all pending stages when the job predates
 never refused for a config change; a model that cannot load fails its own
 stage with `ModelNotReady`, and the operator can `/restart` for a clean run.
 
+Manual routing (local only): `LocalProvider.llm_batch` raises
+`ManualStepRequired(prompt, schema_names)` instead of calling `LocalRunner`
+when `config.routes[stage] == "manual"` and no pasted response is cached yet
+for that call ([pipeline.md](pipeline.md)). `run_stages` catches it before
+the generic retry/rewind handling — like the `upload`/`awaiting_approval`
+gate, it returns `"waiting"` without marking the attempt failed or the stage
+`failed`, setting the job to `awaiting_manual_input` and the stage to
+`awaiting_input`. No `GPUManager`/`LocalRunner` call happens for a manual
+call, so it never touches the GPU queue.
+
 ## Related tests
 
 `test_pipeline.py` (mock worker; `test_failed_stage_rewinds_with_corrections_and_continues`,
 `test_rewind_budget_is_bounded_then_requires_review`, `test_mock_mode_never_rewinds`, `test_config_change_mid_run_is_recorded_not_blocking`).
+`test_local_api.py::test_manual_script_stage_parks_and_resumes_via_api` (manual routing end to end).
 
 ## Known limitations
 

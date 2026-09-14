@@ -15,8 +15,11 @@ legacy SQLite `jobs` JSON import, exclusive worker lock.
 ## Public surface
 
 **v1 (pipeline):** `video_jobs`, `video_stages`, `stage_attempts`.
-`Store`: `list`, `get`, `save`, `create`, `transition`, `restart`, `delete`,
-`claim`, `recover`, `start_attempt` / `finish_attempt`, `attempts`, `worker_lock`.
+`Store`: `list`, `get`, `save`, `create`, `transition`, `restart`,
+`submit_manual_response`, `delete`, `claim`, `recover`, `start_attempt` /
+`finish_attempt`, `attempts`, `worker_lock`. `RESTARTABLE` (`draft`,
+`failed`, `awaiting_approval`, `awaiting_manual_input`, `completed`) gates
+both `restart` and, via the job status check, deletability of a parked job.
 
 **Control plane (schema now, little pipeline use):** `channels`,
 `channel_configs`, `video_projects`, `workflow_runs`, `workflow_events`,
@@ -50,6 +53,12 @@ Revisions: `0001_relational_state`, `0002_control_plane`, `0003_series`,
 - SQLite: `{database}.worker.lock` via `filelock`, timeout 0.
 - Legacy import is idempotent and preserves original stage pipelines.
 - Concurrent `transition` has one winner.
+- `submit_manual_response` atomically re-checks the job is
+  `awaiting_manual_input` and the target stage is `awaiting_input` before
+  writing (returns `None`, not a partial write, otherwise), appends the raw
+  pasted text to `output.manual.responses` keyed by call order, sets the
+  stage back to `pending`, and requeues the job — see
+  [pipeline.md](pipeline.md#manual-routing-human-relay).
 - `delete` explicitly deletes `stage_attempts` then `video_stages` before the
   `video_jobs` row in one transaction; `Attempt.job_id` has no DB-level
   `ondelete=CASCADE`, so this order is required (`video_stages.job_id` does
@@ -58,8 +67,9 @@ Revisions: `0001_relational_state`, `0002_control_plane`, `0003_series`,
 ## Related tests
 
 `test_database.py` (legacy import, concurrent transitions, worker lock,
-optional Postgres via `TEST_DATABASE_URL`); `test_series.py`
-(`test_migration_creates_series_tables`, series tables through the API).
+`test_submit_manual_response_*`, optional Postgres via `TEST_DATABASE_URL`);
+`test_series.py` (`test_migration_creates_series_tables`, series tables
+through the API).
 
 ## Known limitations
 

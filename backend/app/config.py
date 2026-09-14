@@ -171,6 +171,11 @@ class ModelConfig(BaseModel):
         if self.images_enabled:
             required["assets"] = {"diffusers", "diffusers_gguf"}
         for stage, runtimes in required.items():
+            # A stage routed to "manual" is relayed through a human pasting into
+            # their own Claude/Gemini chat instead of a locally loaded model, so
+            # it needs no matching ModelSpec.
+            if runtimes == {"llama_cpp"} and self.routes.get(stage) == "manual":
+                continue
             model = self.models.get(self.routes.get(stage, ""))
             if model is None or model.runtime not in runtimes:
                 raise ValueError(

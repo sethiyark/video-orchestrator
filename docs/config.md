@@ -29,7 +29,11 @@ stripping is in the runner).
 `ModelConfig` forbids extra keys; stage routes must match required runtimes:
 LLM stages → `llama_cpp`; narration → `kokoro | qwen_tts`; alignment →
 `whisper | ctc_aligner`; similarity → `sentence_transformers`; assets →
-`diffusers | diffusers_gguf` when `images_enabled`.
+`diffusers | diffusers_gguf` when `images_enabled`. Any LLM stage
+(`research`/`verification`/`outline`/`script`/`critique`/`storyboard`/`metadata`)
+may instead route to `"manual"` — relayed through a human pasting into their
+own Claude/Gemini chat instead of a local model — with no matching
+`ModelSpec` required; see [pipeline.md](pipeline.md#manual-routing-human-relay).
 
 `ModelSpec`: `runtime`, `repo_id`, `revision`, `files`, `filename`,
 `extra_repos` (`name`, `repo_id`, `revision`, `files`, `filename`), `device`
@@ -83,7 +87,10 @@ before anything is written.
 `test_overlay_rejects_non_overridable_fields`,
 `test_save_and_reset_override_roundtrip`,
 `test_invalid_override_rejected_and_nothing_written`,
-`test_governor_enforces_caps_and_human_gates`.
+`test_governor_enforces_caps_and_human_gates`,
+`test_manual_route_skips_model_requirement_for_llm_stages`,
+`test_manual_route_still_requires_a_model_for_non_llm_stages`
+([test_config.py](../backend/tests/test_config.py)).
 
 ## Known limitations
 

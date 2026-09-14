@@ -11,7 +11,13 @@ from sqlalchemy.orm import Session
 from .db import Attempt, StageRecord, VideoJob, make_engine, migrate
 from .providers import STAGES
 
-RESTARTABLE = ("draft", "failed", "awaiting_approval", "completed")
+RESTARTABLE = (
+    "draft",
+    "failed",
+    "awaiting_approval",
+    "awaiting_manual_input",
+    "completed",
+)
 
 
 def now():
@@ -202,6 +208,27 @@ class Store:
             for stage in stages:
                 stage.status = "pending"
                 stage.output = None
+        return self.get(job_id)
+
+    def submit_manual_response(self, job_id, stage_name, raw_text):
+        """Record a pasted response for a stage parked on manual input, and
+        re-queue the job so the worker resumes it. Returns None (caller should
+        treat as a 409) if the job/stage isn't actually parked."""
+        with Session(self.engine) as session, session.begin():
+            job_row = session.get(VideoJob, job_id)
+            if job_row is None or job_row.status != "awaiting_manual_input":
+                return None
+            stage_row = session.get(StageRecord, (job_id, stage_name))
+            if stage_row is None or stage_row.status != "awaiting_input":
+                return None
+            manual = dict((stage_row.output or {}).get("manual") or {})
+            responses = dict(manual.get("responses") or {})
+            responses[str(len(responses))] = raw_text
+            stage_row.output = {**(stage_row.output or {}), "manual": {**manual, "responses": responses}}
+            stage_row.status = "pending"
+            job_row.status = "queued"
+            job_row.error = None
+            job_row.updated_at = now()
         return self.get(job_id)
 
     def delete(self, job_id):

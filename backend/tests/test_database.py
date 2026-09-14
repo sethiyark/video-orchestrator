@@ -89,3 +89,49 @@ def test_postgres_state_and_advisory_lock():
     ):
         pass
     store.engine.dispose()
+
+
+def test_submit_manual_response_records_reply_and_requeues(tmp_path):
+    store = Store(str(tmp_path / "jobs.db"))
+    job = store.create("DNS", "")
+    job["status"] = "awaiting_manual_input"
+    stage = next(s for s in job["stages"] if s["name"] == "script")
+    stage["status"] = "awaiting_input"
+    stage["output"] = {"manual": {"prompt": "...", "schema_names": ["ScriptSection"]}}
+    store.save(job)
+
+    result = store.submit_manual_response(job["id"], "script", "[pasted]")
+    assert result["status"] == "queued"
+    assert result["error"] is None
+    stage = next(s for s in result["stages"] if s["name"] == "script")
+    assert stage["status"] == "pending"
+    assert stage["output"]["manual"]["responses"] == {"0": "[pasted]"}
+
+
+def test_submit_manual_response_appends_to_prior_rounds(tmp_path):
+    store = Store(str(tmp_path / "jobs.db"))
+    job = store.create("DNS", "")
+    job["status"] = "awaiting_manual_input"
+    stage = next(s for s in job["stages"] if s["name"] == "critique")
+    stage["status"] = "awaiting_input"
+    stage["output"] = {
+        "manual": {
+            "prompt": "round 2",
+            "schema_names": ["Critic"] * 5,
+            "responses": {"0": "round-1-response"},
+        }
+    }
+    store.save(job)
+
+    result = store.submit_manual_response(job["id"], "critique", "round-2-response")
+    stage = next(s for s in result["stages"] if s["name"] == "critique")
+    assert stage["output"]["manual"]["responses"] == {
+        "0": "round-1-response",
+        "1": "round-2-response",
+    }
+
+
+def test_submit_manual_response_rejects_when_not_parked(tmp_path):
+    store = Store(str(tmp_path / "jobs.db"))
+    job = store.create("DNS", "")
+    assert store.submit_manual_response(job["id"], "script", "anything") is None

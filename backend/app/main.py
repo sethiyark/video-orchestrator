@@ -22,7 +22,13 @@ from sqlalchemy.exc import SQLAlchemyError
 from .artifacts import Artifacts
 from .config import IMAGE_RUNTIMES, OVERRIDABLE_FIELDS, RUNTIME_EXTRAS, Settings
 from .infra import RedisGateway
-from .local_provider import IntegrationUnavailable, LocalProvider, ReviewRequired
+from .local_provider import (
+    IntegrationUnavailable,
+    LocalProvider,
+    ManualStepRequired,
+    ReviewRequired,
+)
+from .manual import parse_payload as parse_manual_payload
 from .models.hub import ModelHub, ModelNotReady
 from .models.setup import SetupBusy, SetupManager
 from .observability import configure_logging, render_metrics
@@ -104,6 +110,11 @@ class JobInput(SourcesInput):
         if self.theme_id and not self.series_id:
             raise ValueError("theme_id requires series_id")
         return self
+
+
+class ManualResponseInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    response: str = Field(min_length=1, max_length=100_000)
 
 
 class PromoteInput(BaseModel):
@@ -282,6 +293,21 @@ def create_app(
                         attempt_id, "interrupted", error="Worker stopped"
                     )
                     raise
+                except ManualStepRequired as exc:
+                    store.finish_attempt(attempt_id, "interrupted", error=None)
+                    stage["status"] = "awaiting_input"
+                    stage["output"] = {
+                        "manual": {
+                            "responses": (
+                                (stage.get("output") or {}).get("manual") or {}
+                            ).get("responses", {}),
+                            "prompt": exc.prompt,
+                            "schema_names": exc.schema_names,
+                        }
+                    }
+                    job["status"] = "awaiting_manual_input"
+                    store.save(job)
+                    return "waiting"
                 except Exception as exc:
                     store.finish_attempt(
                         attempt_id,
@@ -317,7 +343,7 @@ def create_app(
             rebase_config(job)
             while await run_stages(job) == "rewound":
                 pass
-            if job["status"] == "awaiting_approval":
+            if job["status"] in ("awaiting_approval", "awaiting_manual_input"):
                 return
             job["status"] = "completed"
             store.save(job)
@@ -728,6 +754,26 @@ def create_app(
         result = store.transition(job_id, ["awaiting_approval"], "queued", approve=True)
         if result is None:
             raise HTTPException(409, "Job is not ready for approval")
+        return result
+
+    @app.post("/api/jobs/{job_id}/stages/{stage_name}/manual-response")
+    async def submit_manual_response(job_id: str, stage_name: str, body: ManualResponseInput):
+        job = get_job(job_id)
+        stage = next((s for s in job["stages"] if s["name"] == stage_name), None)
+        if (
+            stage is None
+            or stage["status"] != "awaiting_input"
+            or job["status"] != "awaiting_manual_input"
+        ):
+            raise HTTPException(409, "This stage is not waiting for manual input")
+        schema_names = stage["output"]["manual"]["schema_names"]
+        try:
+            parse_manual_payload(body.response, schema_names)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        result = store.submit_manual_response(job_id, stage_name, body.response)
+        if result is None:
+            raise HTTPException(409, "This stage is not waiting for manual input")
         return result
 
     @app.delete("/api/jobs/{job_id}", status_code=204)

@@ -1,3 +1,4 @@
+import json
 import sys
 import threading
 import time
@@ -449,3 +450,79 @@ def test_local_render_success_reaches_approval_and_serves_video(tmp_path):
         assert client.post(f"/api/jobs/{job['id']}/approve").status_code == 200
         failed = wait(client, job["id"], "failed")
         assert "YouTube upload is not connected" in failed["error"]
+
+
+def test_manual_script_stage_parks_and_resumes_via_api(tmp_path):
+    settings = Settings()
+    settings.mode = "local"
+    settings.artifact_dir = tmp_path / "artifacts"
+    settings.cache_dir = tmp_path / "models"
+    settings.models.routes["script"] = "manual"
+    path = str(tmp_path / "jobs.db")
+    store = Store(path)
+    provider = LocalProvider(settings, store, PipelineFixtureRunner())
+    with TestClient(create_app(path, provider, settings)) as client:
+        response = client.post(
+            "/api/jobs",
+            json={
+                "title": "DNS",
+                "sources": [
+                    {
+                        "id": "s1",
+                        "url": "https://example.com",
+                        "title": "DNS reference",
+                        "excerpt": "DNS maps domain names to IP addresses.",
+                    }
+                ],
+            },
+        )
+        job_id = response.json()["id"]
+        assert client.post(f"/api/jobs/{job_id}/run").status_code == 200
+
+        job = wait(client, job_id, "awaiting_manual_input")
+        script_stage = next(s for s in job["stages"] if s["name"] == "script")
+        assert script_stage["status"] == "awaiting_input"
+        prompt = script_stage["output"]["manual"]["prompt"]
+        assert "ScriptSection" in prompt
+
+        # A stage not currently parked refuses the paste-back.
+        wrong_stage = client.post(
+            f"/api/jobs/{job_id}/stages/outline/manual-response",
+            json={"response": "[]"},
+        )
+        assert wrong_stage.status_code == 409
+
+        # Malformed JSON is rejected before touching any state; job stays parked.
+        bad = client.post(
+            f"/api/jobs/{job_id}/stages/script/manual-response",
+            json={"response": "not json"},
+        )
+        assert bad.status_code == 400
+        assert client.get(f"/api/jobs/{job_id}").json()["status"] == "awaiting_manual_input"
+
+        good = client.post(
+            f"/api/jobs/{job_id}/stages/script/manual-response",
+            json={
+                "response": json.dumps(
+                    [
+                        {
+                            "text": "This is a long enough narration for one section.",
+                            "claim_ids": ["c1"],
+                        }
+                    ]
+                )
+            },
+        )
+        assert good.status_code == 200
+
+        job = wait(client, job_id, "awaiting_approval")
+        script_stage = next(s for s in job["stages"] if s["name"] == "script")
+        assert script_stage["status"] == "completed"
+        assert script_stage["output"]["text"] == "This is a long enough narration for one section."
+
+        # No longer parked: resubmitting now 409s instead of silently reapplying.
+        again = client.post(
+            f"/api/jobs/{job_id}/stages/script/manual-response",
+            json={"response": "[]"},
+        )
+        assert again.status_code == 409

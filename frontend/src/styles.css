@@ -431,7 +431,9 @@ h2 {
   background: #edf0fa;
   color: #6974a4;
 }
-.badge.awaiting_approval {
+.badge.awaiting_approval,
+.badge.awaiting_manual_input,
+.badge.awaiting_input {
   background: #fbf1d9;
   color: #a1843c;
 }
@@ -571,6 +573,29 @@ h2 {
 .step.running {
   background: #ebedfa;
   color: #6574a7;
+}
+.step.awaiting_input {
+  background: #fbf1d9;
+  color: #a1843c;
+}
+.manual-step {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.manual-step textarea {
+  font-family: inherit;
+  font-size: 12px;
+  padding: 10px;
+  border: 1px solid #dfe3d8;
+  border-radius: 6px;
+  resize: vertical;
+}
+.manual-step button {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 pre {
   white-space: pre-wrap;

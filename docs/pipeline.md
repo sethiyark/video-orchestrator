@@ -35,6 +35,37 @@ child (one model load); `llm(...)` wraps a single request. Before any call,
 `context_size − max_tokens − 512` and raises `ReviewRequired` instead of
 spending a model load.
 
+### Manual routing (human relay)
+
+Any stage whose `routes` entry is `"manual"` instead of a model role has its
+`llm_batch` calls answered by a human instead of `LocalRunner` — for a user
+with a Claude Pro/Gemini Pro chat subscription but no API key. `llm_batch`
+composes one prompt per call (`app/manual.py`'s `compose_prompt`, covering
+every item in that call's `requests` with its instructions, JSON schema, and
+data) and raises `ManualStepRequired(prompt, schema_names)`. The worker
+([providers.md](providers.md)) parks the job as `awaiting_manual_input` and
+the stage as `awaiting_input`, storing the prompt and expected schema names
+on the stage's `output.manual`. `POST
+/api/jobs/{id}/stages/{stage}/manual-response` ([api.md](api.md)) validates
+the pasted reply with the same `app/manual.py` `parse_payload` (strict
+pydantic schema validation, same as a model's output) before accepting it,
+appends it to `output.manual.responses` keyed by call order, and re-queues
+the job.
+
+Each call within one `execute()` invocation gets the next sequential index
+(`self._manual_call_index`, reset per `execute()`); replaying a resumed
+stage from the top re-derives the same call sequence, so earlier calls are
+served from the cache and only the first uncached call parks again. This
+lets a multi-call stage — script's per-section writes and short-section
+retries, or critique's round loop and the `rewrite()` step it triggers
+(tagged `"script"`, independently manual or not) — pause more than once per
+stage invocation without any extra bookkeeping: `write_sections`, `rewrite`,
+and the `critique` round loop are unchanged and unaware they are talking to
+a human. `budget()` does not apply to manual calls (no local context window
+to protect). Today only `script` and `critique` are documented/expected to
+use `"manual"`, but `validate_routes` accepts it for any of the seven
+`llama_cpp`-family stages.
+
 Stages implemented: research, verification, outline, script, critique,
 storyboard (closed component enum: `DefinitionCard`, `AnimatedFlowDiagram`,
 `BulletReveal`, `ImagePan`, `SeriesAsset`), assets (optional images; pins
@@ -159,12 +190,21 @@ incomplete stage.
   closed, at storyboard and again when pinned.
 - A model config/revision change is recorded per job (`config_changes`) and
   per stage output (provenance); it does not stop a job.
+- A manually-pasted reply (`routes[stage] == "manual"`) gets no elevated
+  trust: it passes through the same pydantic schema validation and the same
+  downstream checks (`check_claim_ids`, `check_script_length`,
+  `min_script_score`, `required_changes`) as model output. No credentials
+  are involved — the app never talks to Claude or Gemini itself; the user
+  relays through their own browser tab.
 
 ## Related tests
 
 [`test_local_provider.py`](../backend/tests/test_local_provider.py),
 [`test_local_api.py`](../backend/tests/test_local_api.py),
-[`test_series.py`](../backend/tests/test_series.py).
+[`test_series.py`](../backend/tests/test_series.py),
+[`test_manual.py`](../backend/tests/test_manual.py) (prompt/response
+round-trip), [`test_config.py`](../backend/tests/test_config.py) (`"manual"`
+route validation).
 
 ## Known limitations
 

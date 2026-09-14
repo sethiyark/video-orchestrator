@@ -12,6 +12,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from . import manual
 from .artifacts import Artifacts
 from .config import IMAGE_RUNTIMES
 from .models.hub import ModelHub, ModelNotReady
@@ -83,6 +84,18 @@ class ReviewRequired(ValueError):
 
 class IntegrationUnavailable(ValueError):
     pass
+
+
+class ManualStepRequired(RuntimeError):
+    """A stage routed to "manual" has no cached response for its next LLM call.
+    ``prompt`` is what the user pastes into their own Claude/Gemini chat;
+    ``schema_names`` lets the manual-response endpoint validate the reply
+    before accepting it, without re-deriving the request list."""
+
+    def __init__(self, message, prompt, schema_names):
+        super().__init__(message)
+        self.prompt = prompt
+        self.schema_names = schema_names
 
 
 def output_for(job, stage):
@@ -288,6 +301,9 @@ class LocalProvider:
         # deterministic failure (fixed seed + prompt reproduce the same bad output)
         # actually samples something different instead of repeating it verbatim.
         self._attempt = 0
+        # Reset per execute() call; indexes manual-routed llm_batch calls so a
+        # resumed stage replays its cached responses in order.
+        self._manual_call_index = 0
 
     @property
     def config(self):
@@ -350,8 +366,40 @@ class LocalProvider:
                 f"({limit} tokens); reduce sources or excerpts, or raise context_size"
             )
 
+    def _stage(self, job, stage):
+        return next(item for item in job["stages"] if item["name"] == stage)
+
+    async def _manual_batch(self, stage, job, requests):
+        """Serve one LLM call from a human-pasted response, or park for one.
+
+        Each call within a stage's execution gets the next sequential index
+        (self._manual_call_index, reset per top-level execute()). Replaying a
+        stage from the top after a resume re-derives the same call sequence,
+        so earlier calls in this invocation are satisfied from the cache and
+        only the first call without a cached response parks again — this is
+        what lets a multi-round loop (e.g. critique → rewrite → critique)
+        work without separately persisting Python loop state.
+        """
+        index = self._manual_call_index
+        self._manual_call_index += 1
+        current = (self._stage(job, stage).get("output") or {}).get("manual") or {}
+        responses = current.get("responses") or {}
+        schema_names = [schema.__name__ for _, _, schema, *_ in requests]
+        raw = responses.get(str(index))
+        if raw is not None:
+            parsed = manual.parse_payload(raw, schema_names)
+            return [{**item, "provenance": {"manual": True}} for item in parsed]
+        prompt = manual.compose_prompt(self.SYSTEM_PROMPT, requests)
+        raise ManualStepRequired(
+            f"Waiting for manual {stage} input (step {index + 1})",
+            prompt=prompt,
+            schema_names=schema_names,
+        )
+
     async def llm_batch(self, stage, job, requests):
         """One child, one model load, many JSON requests: (instructions, data, schema[, seed])."""
+        if self.config.routes[stage] == "manual":
+            return await self._manual_batch(stage, job, requests)
         payload = []
         for instructions, data, schema, *options in requests:
             corrections = (job.get("corrections") or {}).get(stage)
@@ -699,6 +747,7 @@ class LocalProvider:
     async def execute(self, stage, job, attempt: int = 0):
         corrections = (job.get("corrections") or {}).get(stage) or {}
         self._attempt = attempt + corrections.get("attempt", 0)
+        self._manual_call_index = 0
         try:
             result = await self._execute(stage, job)
         except ValidationError as exc:

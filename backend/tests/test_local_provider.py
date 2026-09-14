@@ -5,7 +5,7 @@ from copy import deepcopy
 import pytest
 
 from app.config import Settings
-from app.local_provider import LocalProvider, ReviewRequired
+from app.local_provider import LocalProvider, ManualStepRequired, ReviewRequired
 from app.schemas import Storyboard
 from app.store import Store
 
@@ -775,3 +775,107 @@ def test_tts_timing_cannot_bypass_fidelity(tmp_path):
     with pytest.raises(ReviewRequired, match="fidelity") as error:
         asyncio.run(provider.execute("alignment", job))
     assert error.value.rewind_to == "narration"
+
+
+def stage(job, name):
+    return next(s for s in job["stages"] if s["name"] == name)
+
+
+def test_manual_script_parks_with_combined_prompt_and_no_model_load(tmp_path):
+    provider, runner, job = setup(tmp_path, [])
+    provider.config.routes["script"] = "manual"
+    complete(job, "verification", {"verified_claims": [{"id": "c1", "text": "DNS"}]})
+    complete(
+        job,
+        "outline",
+        {"sections": [section("Intro", 40, ["c1"]), section("Wrap", 40, ["c1"])]},
+    )
+    with pytest.raises(ManualStepRequired) as failure:
+        asyncio.run(provider.execute("script", job))
+    assert runner.calls == []
+    assert "Intro" in failure.value.prompt
+    assert "Wrap" in failure.value.prompt
+    assert failure.value.schema_names == ["ScriptSection", "ScriptSection"]
+
+
+def test_manual_script_resume_with_valid_pasted_response(tmp_path):
+    provider, runner, job = setup(tmp_path, [])
+    provider.config.routes["script"] = "manual"
+    complete(job, "verification", {"verified_claims": [{"id": "c1", "text": "DNS"}]})
+    complete(
+        job,
+        "outline",
+        {"sections": [section("Intro", 40, ["c1"]), section("Wrap", 40, ["c1"])]},
+    )
+    pasted = json.dumps(
+        [
+            {"text": words(30, "a"), "claim_ids": ["c1"]},
+            {"text": words(30, "b"), "claim_ids": ["c1"]},
+        ]
+    )
+    stage(job, "script")["output"] = {"manual": {"responses": {"0": pasted}}}
+    result = asyncio.run(provider.execute("script", job))
+    assert runner.calls == []
+    assert result["text"] == "\n\n".join([words(30, "a"), words(30, "b")])
+
+
+def test_manual_script_resume_rejects_response_outside_verified_claims(tmp_path):
+    provider, _runner, job = setup(tmp_path, [])
+    provider.config.routes["script"] = "manual"
+    complete(job, "verification", {"verified_claims": [{"id": "c1", "text": "DNS"}]})
+    complete(job, "outline", {"sections": [section("Intro", 40, ["c1"])]})
+    pasted = json.dumps([{"text": words(30, "a"), "claim_ids": ["invented"]}])
+    stage(job, "script")["output"] = {"manual": {"responses": {"0": pasted}}}
+    with pytest.raises(ReviewRequired, match="outside"):
+        asyncio.run(provider.execute("script", job))
+
+
+def test_manual_resume_rejects_malformed_cached_response(tmp_path):
+    provider, runner, job = setup(tmp_path, [])
+    provider.config.routes["script"] = "manual"
+    complete(job, "verification", {"verified_claims": [{"id": "c1", "text": "DNS"}]})
+    complete(job, "outline", {"sections": [section("Intro", 40, ["c1"])]})
+    stage(job, "script")["output"] = {"manual": {"responses": {"0": "not json"}}}
+    with pytest.raises(ValueError, match="not valid JSON"):
+        asyncio.run(provider.execute("script", job))
+    assert runner.calls == []
+
+
+def test_manual_critique_single_round_resume_passes(tmp_path):
+    provider, runner, job = setup(tmp_path, [])
+    provider.config.routes["critique"] = "manual"
+    passing = {"score": 9, "issues": [], "required_changes": [], "optional_changes": []}
+    complete(job, "verification", {"verified_claims": [{"id": "c1", "text": "DNS"}]})
+    complete(job, "script", {"text": "Draft", "claim_ids": ["c1"]})
+    stage(job, "critique")["output"] = {
+        "manual": {"responses": {"0": json.dumps([passing] * 5)}}
+    }
+    result = asyncio.run(provider.execute("critique", job))
+    assert runner.calls == []
+    assert result["score"] == 9
+
+
+def test_manual_critique_low_score_parks_again_for_next_round(tmp_path):
+    """Critique alone is manual; the rewrite it triggers (tagged "script")
+    still runs locally since routes["script"] is untouched — confirming the
+    two stages' manual-ness is independent, and that a second parked round
+    correctly gets the next call index (1) rather than replaying round 1."""
+    failing = {
+        "score": 4,
+        "issues": [],
+        "required_changes": ["tighten"],
+        "optional_changes": [],
+    }
+    rewrite = {"text": "A revised and sufficiently long draft.", "claim_ids": ["c1"]}
+    provider, runner, job = setup(tmp_path, [rewrite])
+    provider.config.routes["critique"] = "manual"
+    provider.config.governor.critique_rounds = 2
+    complete(job, "verification", {"verified_claims": [{"id": "c1", "text": "DNS"}]})
+    complete(job, "script", {"text": "Draft", "claim_ids": ["c1"]})
+    stage(job, "critique")["output"] = {
+        "manual": {"responses": {"0": json.dumps([failing] * 5)}}
+    }
+    with pytest.raises(ManualStepRequired) as second_round:
+        asyncio.run(provider.execute("critique", job))
+    assert len(runner.calls) == 1  # only the local rewrite touched the model
+    assert "step 2" in str(second_round.value)

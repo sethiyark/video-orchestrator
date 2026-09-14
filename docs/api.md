@@ -30,6 +30,7 @@ No fill/model arithmetic.
 | POST | `/api/jobs/{id}/run` | `draft`/`failed` → `queued`; 409 if `series_stale`. A changed local model config does not block: it is recorded in `config_changes` and the job continues |
 | POST | `/api/jobs/{id}/restart` | Wipe stages, rebind `config_hash`/`stage_hashes` and the series snapshot, clear `config_changes`/`rewinds`/`corrections`, `queued`; not while queued/running |
 | POST | `/api/jobs/{id}/approve` | `awaiting_approval` → `queued` + `approved_at` |
+| POST | `/api/jobs/{id}/stages/{stage}/manual-response` | `{response}` (≤100000 chars) pasted from the user's own Claude/Gemini chat for a stage routed to `"manual"` and currently `awaiting_input`. Validated against that call's schema(s) before anything is written: 400 on invalid JSON/shape/schema (job stays parked, nothing changed); 409 if the job isn't `awaiting_manual_input` or the stage isn't `awaiting_input`. On success, appends the raw text to the stage's `output.manual.responses` and requeues the job. See [pipeline.md](pipeline.md#manual-routing-human-relay) |
 | DELETE | `/api/jobs/{id}` | 204; removes the job, its stage records, and attempts, and returns a linked idea to `backlog`. Any status. 404 unknown job |
 | GET/POST | `/api/series` | List newest first / create `{name, slug?, description?}` (409 duplicate slug) |
 | GET/PATCH/DELETE | `/api/series/{id}` | DELETE 409 while any job references the series |
@@ -96,8 +97,8 @@ alone. Setup state is `{state, started_at, ended_at, error, log}`.
 `test_download_endpoint_runs_hub_in_background`,
 `test_install_endpoint_uses_fixed_command`, `test_config_override_endpoints`,
 `test_config_change_is_recorded_and_job_continues`, `test_delete_job_removes_job_and_attempts`,
-`test_delete_unknown_job_is_404`, pipeline tests in `test_pipeline.py`, series
-tests in `test_series.py`.
+`test_delete_unknown_job_is_404`, `test_manual_script_stage_parks_and_resumes_via_api`,
+pipeline tests in `test_pipeline.py`, series tests in `test_series.py`.
 
 ## Known limitations
 

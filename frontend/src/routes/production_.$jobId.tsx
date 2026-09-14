@@ -7,16 +7,20 @@ import {
   BookOpen,
   BookUp,
   Check,
+  Clipboard,
   Play,
   RotateCcw,
+  Send,
   Trash2,
 } from "lucide-react";
 import {
   api,
   apiDelete,
   artifactUrl,
+  submitManualResponse,
   type AssetKind,
   type Job,
+  type ManualStageOutput,
   type SeriesAsset,
 } from "../lib/api";
 import { label, needsRestart } from "../lib/format";
@@ -39,6 +43,20 @@ function ProductionDetail() {
     mutationFn: ({ id, action }: { id: string; action: string }) =>
       api<Job>(`/jobs/${id}/${action}`, {}),
     onSuccess: () => client.invalidateQueries({ queryKey: ["jobs"] }),
+  });
+  const [draftResponse, setDraftResponse] = useState("");
+  const manualResponse = useMutation({
+    mutationFn: ({
+      stageName,
+      response,
+    }: {
+      stageName: string;
+      response: string;
+    }) => submitManualResponse(current!.id, stageName, response),
+    onSuccess: () => {
+      setDraftResponse("");
+      void client.invalidateQueries({ queryKey: ["jobs"] });
+    },
   });
   const [promoted, setPromoted] = useState("");
   const promote = useMutation({
@@ -208,14 +226,22 @@ function ProductionDetail() {
                   placeholders; no playable video has been generated.
                 </div>
               )}
+              {current.status === "awaiting_manual_input" && (
+                <div className="review-note">
+                  Paste the prompt below into your Claude Pro or Gemini Pro
+                  chat, then paste the reply back to continue.
+                </div>
+              )}
               {(current.error ||
                 action.error ||
                 deleteJob.error ||
-                promote.error) && (
+                promote.error ||
+                manualResponse.error) && (
                 <p role="alert" className="error">
                   {action.error?.message ||
                     deleteJob.error?.message ||
                     promote.error?.message ||
+                    manualResponse.error?.message ||
                     current.error}
                 </p>
               )}
@@ -261,7 +287,61 @@ function ProductionDetail() {
                         {stage.status}
                       </span>
                     </summary>
-                    {stage.output ? (
+                    {stage.status === "awaiting_input" ? (
+                      <div className="manual-step">
+                        <p className="muted">
+                          Round {Object.keys(
+                            (stage.output as ManualStageOutput | null)?.manual
+                              ?.responses ?? {},
+                          ).length + 1}
+                          . Copy this prompt into Claude Pro or Gemini Pro:
+                        </p>
+                        <pre>
+                          {(stage.output as ManualStageOutput | null)?.manual
+                            ?.prompt}
+                        </pre>
+                        <button
+                          type="button"
+                          className="secondary"
+                          onClick={() => {
+                            navigator.clipboard
+                              .writeText(
+                                (stage.output as ManualStageOutput | null)
+                                  ?.manual?.prompt ?? "",
+                              )
+                              .catch(() => {
+                                // Clipboard permission denied; the prompt is
+                                // still selectable/copyable from the <pre>.
+                              });
+                          }}
+                        >
+                          <Clipboard size={14} /> Copy prompt
+                        </button>
+                        <textarea
+                          rows={10}
+                          placeholder="Paste the reply here"
+                          value={draftResponse}
+                          onChange={(event) =>
+                            setDraftResponse(event.target.value)
+                          }
+                        />
+                        <button
+                          type="button"
+                          className="primary"
+                          disabled={
+                            manualResponse.isPending || !draftResponse.trim()
+                          }
+                          onClick={() =>
+                            manualResponse.mutate({
+                              stageName: stage.name,
+                              response: draftResponse,
+                            })
+                          }
+                        >
+                          <Send size={14} /> Submit reply
+                        </button>
+                      </div>
+                    ) : stage.output ? (
                       <div>
                         <pre>{JSON.stringify(stage.output, null, 2)}</pre>
                         {typeof stage.output.artifact === "object" &&
