@@ -22,15 +22,18 @@ No fill/model arithmetic.
 | POST | `/api/models/{role}/config` | `ModelOverride` body (subset of `OVERRIDABLE_FIELDS`, `extra="forbid"`); saves the overlay and returns the `/api/models` payload. 422 invalid/empty; 409 while that role downloads |
 | POST | `/api/models/{role}/config/reset` | Drops the role's override; returns the `/api/models` payload |
 | GET | `/api/jobs` | Newest first |
-| POST | `/api/jobs` | Title, brief, sources, optional `series_id`/`theme_id`/`library_source_ids` (local requires ≥1 source after library copy) |
+| POST | `/api/jobs` | Title, brief, sources, optional `series_id`/`theme_id`/`library_source_ids` (local requires ≥1 source after library copy), optional `render: {captions, music_asset_id}` (422 for a music id that is not an active music asset of the job's series) |
+| PATCH | `/api/jobs/{id}/render` | `RenderOptions` body; 409 once the job is queued/running or the render stage completed; 422 invalid music asset |
 | GET | `/api/jobs/{id}` | Job + stages |
 | GET | `/api/jobs/{id}/attempts` | Attempt history |
 | GET | `/api/jobs/{id}/artifacts/{artifact_id}` | FileResponse; IDs cannot contain paths |
-| POST | `/api/jobs/{id}/artifacts/{artifact_id}/promote` | `{name, kind}`; copies a `.png`/`.wav` stage media output into the job's series library. 201 new, 200 duplicate; 409 no series; 415 not promotable; 404 not a media output; 413 over cap |
+| POST | `/api/jobs/{id}/artifacts/{artifact_id}/promote` | `{name, kind}`; copies a `.png`/`.jpg`/`.webp`/`.wav` stage media output into the job's series library. 201 new, 200 duplicate; 409 no series; 415 not promotable; 404 not a media output; 413 over cap |
 | POST | `/api/jobs/{id}/run` | `draft`/`failed` → `queued`; 409 if `series_stale`. A changed local model config does not block: it is recorded in `config_changes` and the job continues |
 | POST | `/api/jobs/{id}/restart` | Wipe stages, rebind `config_hash`/`stage_hashes` and the series snapshot, clear `config_changes`/`rewinds`/`corrections`, `queued`; not while queued/running |
 | POST | `/api/jobs/{id}/approve` | `awaiting_approval` → `queued` + `approved_at` |
 | POST | `/api/jobs/{id}/stages/{stage}/manual-response` | `{response}` (≤100000 chars) pasted from the user's own Claude/Gemini chat for a stage routed to `"manual"` and currently `awaiting_input`. Validated against that call's schema(s) before anything is written: 400 on invalid JSON/shape/schema (job stays parked, nothing changed); 409 if the job isn't `awaiting_manual_input` or the stage isn't `awaiting_input`. On success, appends the raw text to the stage's `output.manual.responses` and requeues the job. See [pipeline.md](pipeline.md#manual-routing-human-relay) |
+| POST | `/api/jobs/{id}/stages/assets/manual-images/{image_id}` | Raw-body upload (`Content-Type` png/jpeg/webp, magic bytes checked, ≤ 8 MiB) of one image the user made for an assets stage parked on the image relay; `image_id` must be in `output.manual.expected_images`. Adopts the file, records it under `output.manual.images`, updates `missing`, and requeues the job once nothing is missing. 409 not parked; 422 unknown id; 415 type/bytes; 413 size |
+| POST | `/api/jobs/{id}/stages/assets/manual-images/skip` | `{ids?}`; marks scene images as `chapter_hero` fallbacks (default: every missing scene). 422 for a chapter hero or unknown id; requeues when complete |
 | DELETE | `/api/jobs/{id}` | 204; removes the job, its stage records, and attempts, and returns a linked idea to `backlog`. Any status. 404 unknown job |
 | GET/POST | `/api/series` | List newest first / create `{name, slug?, description?}` (409 duplicate slug) |
 | GET/PATCH/DELETE | `/api/series/{id}` | DELETE 409 while any job references the series |
@@ -54,7 +57,8 @@ CORS: `GET`/`POST`/`PUT`/`PATCH`/`DELETE`, origins from `CORS_ORIGINS` (default 
 `JobInput`: title 1–160, brief ≤5000, ≤10 sources with unique ids,
 `series_id`/`theme_id` (theme requires series; theme must belong to it, else
 422), `library_source_ids` ≤10 (requires a series; merged sources must stay
-unique and ≤10, else 422). Job payloads include `series_id`, `theme_id`,
+unique and ≤10, else 422), `render` (`captions` default true,
+`music_asset_id` default null). Job payloads include `render`, `series_id`, `theme_id`,
 `idea_id`, `series_context`, `series_hash`, and computed `series_stale`.
 Local jobs carry `stage_hashes` (per-stage model fingerprints at creation or
 restart) and `config_changes` (one entry per model-config change noticed at
@@ -98,6 +102,7 @@ alone. Setup state is `{state, started_at, ended_at, error, log}`.
 `test_install_endpoint_uses_fixed_command`, `test_config_override_endpoints`,
 `test_config_change_is_recorded_and_job_continues`, `test_delete_job_removes_job_and_attempts`,
 `test_delete_unknown_job_is_404`, `test_manual_script_stage_parks_and_resumes_via_api`,
+`test_manual_image_relay_via_api`, `test_brand_kit_and_music_are_validated_and_pinned`,
 pipeline tests in `test_pipeline.py`, series tests in `test_series.py`.
 
 ## Known limitations

@@ -127,47 +127,168 @@ class SeriesAssetProps(StrictModel):
     caption: str = Field(default="", max_length=300)
 
 
-class SceneBase(StrictModel):
-    scene_id: str = Field(pattern=r"^scene_[0-9]{3}$")
-    narration_text: str
-    duration_seconds: float = Field(gt=0, le=60)
+class ChapterTitleProps(StrictModel):
+    title: str = Field(max_length=80)
+    subtitle: str = Field(default="", max_length=160)
 
 
-class CardScene(SceneBase):
-    component: Literal["DefinitionCard"]
-    props: CardProps
+class OutroProps(StrictModel):
+    title: str = Field(max_length=80)
+    takeaways: list[Annotated[str, Field(max_length=120)]] = Field(
+        min_length=1, max_length=4
+    )
+    next_topic: str = Field(default="", max_length=120)
 
 
-class FlowScene(SceneBase):
-    component: Literal["AnimatedFlowDiagram"]
-    props: FlowProps
-
-
-class BulletScene(SceneBase):
-    component: Literal["BulletReveal"]
-    props: BulletProps
-
-
-class ImageScene(SceneBase):
-    component: Literal["ImagePan"]
-    props: ImageProps
-
-
-class SeriesAssetScene(SceneBase):
-    """Shows an existing series image/logo by id; the id is validated, never a path."""
-
-    component: Literal["SeriesAsset"]
-    props: SeriesAssetProps
-
-
-Scene = Annotated[
-    CardScene | FlowScene | BulletScene | ImageScene | SeriesAssetScene,
-    Field(discriminator="component"),
+# Display-only syntax classes for CodeBlock; the renderer tokenizes text, never runs it.
+CodeLanguage = Literal[
+    "python",
+    "typescript",
+    "javascript",
+    "go",
+    "rust",
+    "bash",
+    "sql",
+    "yaml",
+    "json",
+    "c",
+    "cpp",
+    "java",
+    "text",
 ]
 
 
-class Storyboard(StrictModel):
-    scenes: list[Scene] = Field(min_length=1, max_length=120)
+class CodeBlockProps(StrictModel):
+    title: str = Field(max_length=160)
+    language: CodeLanguage = "text"
+    code: str = Field(min_length=1, max_length=1200)
+    highlight_lines: list[Annotated[int, Field(ge=1, le=40)]] = Field(
+        default_factory=list, max_length=6
+    )
+
+
+class TerminalLine(StrictModel):
+    kind: Literal["command", "output"] = "output"
+    text: str = Field(max_length=120)
+
+
+class TerminalProps(StrictModel):
+    title: str = Field(max_length=160)
+    lines: list[TerminalLine] = Field(min_length=1, max_length=12)
+
+
+class ComparisonSide(StrictModel):
+    label: str = Field(min_length=1, max_length=60)
+    points: list[Annotated[str, Field(max_length=120)]] = Field(
+        min_length=1, max_length=4
+    )
+
+
+class ComparisonProps(StrictModel):
+    title: str = Field(max_length=160)
+    left: ComparisonSide
+    right: ComparisonSide
+
+
+class Stat(StrictModel):
+    value: str = Field(min_length=1, max_length=16)
+    label: str = Field(min_length=1, max_length=60)
+
+
+class StatCounterProps(StrictModel):
+    title: str = Field(max_length=160)
+    stats: list[Stat] = Field(min_length=1, max_length=4)
+
+
+class TimelineEvent(StrictModel):
+    label: str = Field(min_length=1, max_length=40)
+    text: str = Field(max_length=120)
+
+
+class TimelineProps(StrictModel):
+    title: str = Field(max_length=160)
+    events: list[TimelineEvent] = Field(min_length=2, max_length=6)
+
+
+class CalloutProps(StrictModel):
+    """A pull-quote. The provider requires ``quote`` to be located inside the
+    verified claim ``claim_id`` cites; anything else fails closed."""
+
+    title: str = Field(max_length=160)
+    quote: str = Field(min_length=1, max_length=300)
+    claim_id: str = Field(min_length=1, max_length=80)
+
+
+# Closed icon vocabulary rendered as inline SVG by the renderer; never a URL.
+IconName = Literal[
+    "server",
+    "database",
+    "cloud",
+    "lock",
+    "key",
+    "network",
+    "cpu",
+    "memory",
+    "disk",
+    "code",
+    "terminal",
+    "browser",
+    "mobile",
+    "user",
+    "users",
+    "clock",
+    "bolt",
+    "shield",
+    "gear",
+    "chart",
+    "search",
+    "mail",
+    "globe",
+    "warning",
+]
+
+
+class IconItem(StrictModel):
+    icon: IconName
+    label: str = Field(min_length=1, max_length=40)
+
+
+class IconGridProps(StrictModel):
+    title: str = Field(max_length=160)
+    items: list[IconItem] = Field(min_length=2, max_length=6)
+
+
+# component name → props schema. The renderer implements exactly these.
+COMPONENT_PROPS = {
+    "DefinitionCard": CardProps,
+    "AnimatedFlowDiagram": FlowProps,
+    "BulletReveal": BulletProps,
+    "ImagePan": ImageProps,
+    "SeriesAsset": SeriesAssetProps,
+    "ChapterTitle": ChapterTitleProps,
+    "Outro": OutroProps,
+    "CodeBlock": CodeBlockProps,
+    "Terminal": TerminalProps,
+    "Comparison": ComparisonProps,
+    "StatCounter": StatCounterProps,
+    "Timeline": TimelineProps,
+    "Callout": CalloutProps,
+    "IconGrid": IconGridProps,
+}
+COMPONENTS = tuple(COMPONENT_PROPS)
+SCENE_ID = r"^scene_[0-9]{3}$"
+CHAPTER_ID = r"^chapter_[0-9]{2}$"
+MAX_CHAPTERS = 12
+
+
+class SceneBase(StrictModel):
+    scene_id: str = Field(pattern=SCENE_ID)
+    narration_text: str
+    duration_seconds: float = Field(gt=0, le=60)
+    # One generated (or relayed) image per scene: the plate behind text
+    # components, the subject of ImagePan. Required by the provider when
+    # images are enabled; optional in the schema for mock mode and old jobs.
+    image_prompt: str = Field(default="", max_length=300)
 
 
 class SentenceSpan(StrictModel):
@@ -175,37 +296,115 @@ class SentenceSpan(StrictModel):
 
     first_sentence: int = Field(ge=1)
     last_sentence: int = Field(ge=1)
+    image_prompt: str = Field(default="", max_length=300)
 
 
-class CardPlan(SentenceSpan):
-    component: Literal["DefinitionCard"]
-    props: CardProps
+def _scene_classes(base, suffix):
+    """One subclass of ``base`` per component, discriminated by ``component``."""
+    classes = []
+    for name, props in COMPONENT_PROPS.items():
+        classes.append(
+            type(
+                f"{name}{suffix}",
+                (base,),
+                {
+                    "__annotations__": {"component": Literal[name], "props": props},
+                    "__module__": __name__,
+                },
+            )
+        )
+    return classes
 
 
-class FlowPlan(SentenceSpan):
-    component: Literal["AnimatedFlowDiagram"]
-    props: FlowProps
+# Assembled storyboard scenes (CardScene, FlowScene, ... by component name).
+SCENE_CLASSES = _scene_classes(SceneBase, "Scene")
+# Model-planned scenes over sentence numbers.
+PLAN_CLASSES = _scene_classes(SentenceSpan, "Plan")
 
-
-class BulletPlan(SentenceSpan):
-    component: Literal["BulletReveal"]
-    props: BulletProps
-
-
-class ImagePlan(SentenceSpan):
-    component: Literal["ImagePan"]
-    props: ImageProps
-
-
-class SeriesAssetPlan(SentenceSpan):
-    component: Literal["SeriesAsset"]
-    props: SeriesAssetProps
-
-
-PlannedScene = Annotated[
-    CardPlan | FlowPlan | BulletPlan | ImagePlan | SeriesAssetPlan,
+Scene = Annotated[
+    SCENE_CLASSES[0]
+    | SCENE_CLASSES[1]
+    | SCENE_CLASSES[2]
+    | SCENE_CLASSES[3]
+    | SCENE_CLASSES[4]
+    | SCENE_CLASSES[5]
+    | SCENE_CLASSES[6]
+    | SCENE_CLASSES[7]
+    | SCENE_CLASSES[8]
+    | SCENE_CLASSES[9]
+    | SCENE_CLASSES[10]
+    | SCENE_CLASSES[11]
+    | SCENE_CLASSES[12]
+    | SCENE_CLASSES[13],
     Field(discriminator="component"),
 ]
+PlannedScene = Annotated[
+    PLAN_CLASSES[0]
+    | PLAN_CLASSES[1]
+    | PLAN_CLASSES[2]
+    | PLAN_CLASSES[3]
+    | PLAN_CLASSES[4]
+    | PLAN_CLASSES[5]
+    | PLAN_CLASSES[6]
+    | PLAN_CLASSES[7]
+    | PLAN_CLASSES[8]
+    | PLAN_CLASSES[9]
+    | PLAN_CLASSES[10]
+    | PLAN_CLASSES[11]
+    | PLAN_CLASSES[12]
+    | PLAN_CLASSES[13],
+    Field(discriminator="component"),
+]
+
+
+class Chapter(StrictModel):
+    chapter_id: str = Field(pattern=CHAPTER_ID)
+    title: str = Field(min_length=1, max_length=80)
+    tagline: str = Field(default="", max_length=160)
+    first_scene: str = Field(pattern=SCENE_ID)
+    last_scene: str = Field(pattern=SCENE_ID)
+    hero_prompt: str = Field(min_length=10, max_length=300)
+    # Index into the theme palette; the renderer wraps it.
+    accent: int = Field(default=0, ge=0, le=11)
+
+
+class Storyboard(StrictModel):
+    scenes: list[Scene] = Field(min_length=1, max_length=120)
+    # Empty for storyboards planned before chapters existed.
+    chapters: list[Chapter] = Field(default_factory=list, max_length=MAX_CHAPTERS)
+
+    @model_validator(mode="after")
+    def chapters_cover_scenes(self):
+        if not self.chapters:
+            return self
+        ids = [scene.scene_id for scene in self.scenes]
+        cursor = 0
+        for chapter in self.chapters:
+            if cursor >= len(ids) or chapter.first_scene != ids[cursor]:
+                raise ValueError(
+                    f"{chapter.chapter_id} must start at scene {ids[cursor] if cursor < len(ids) else 'end'}"
+                )
+            if chapter.last_scene not in ids[cursor:]:
+                raise ValueError(f"{chapter.chapter_id} ends before it starts")
+            cursor = ids.index(chapter.last_scene) + 1
+        if cursor != len(ids):
+            raise ValueError("chapters must cover every scene")
+        return self
+
+
+class ChapterSpan(StrictModel):
+    """Model-planned chapter over sentence numbers; the provider snaps spans."""
+
+    first_sentence: int = Field(ge=1)
+    last_sentence: int = Field(ge=1)
+    title: str = Field(min_length=1, max_length=80)
+    tagline: str = Field(default="", max_length=160)
+    hero_prompt: str = Field(min_length=10, max_length=300)
+
+
+class ChapterPlan(StrictModel):
+    chapters: list[ChapterSpan] = Field(min_length=1, max_length=MAX_CHAPTERS)
+
 
 MAX_SCENE_SENTENCES = 6
 

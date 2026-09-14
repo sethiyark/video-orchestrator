@@ -142,7 +142,9 @@ class Governor(BaseModel):
     max_rewinds: int = Field(default=2, ge=0, le=5)
     min_research_confidence: float = Field(default=0.9, ge=0, le=1)
     max_similarity: float = Field(default=0.9, ge=0, le=1)
-    max_images: int = Field(default=3, ge=0, le=30)
+    # Per-video image budget; the assets stage also honours the channel
+    # Governor's max_image_generations_per_video.
+    max_images: int = Field(default=3, ge=0, le=120)
     # Alignment fails closed when the narration audio drifts from the script.
     min_narration_fidelity: float = Field(default=0.85, ge=0, le=1)
 
@@ -171,10 +173,12 @@ class ModelConfig(BaseModel):
         if self.images_enabled:
             required["assets"] = {"diffusers", "diffusers_gguf"}
         for stage, runtimes in required.items():
-            # A stage routed to "manual" is relayed through a human pasting into
-            # their own Claude/Gemini chat instead of a locally loaded model, so
-            # it needs no matching ModelSpec.
-            if runtimes == {"llama_cpp"} and self.routes.get(stage) == "manual":
+            # A stage routed to "manual" is relayed through a human — pasting
+            # into their own Claude/Gemini chat, or uploading images they made
+            # there — instead of a locally loaded model, so it needs no ModelSpec.
+            if (
+                runtimes == {"llama_cpp"} or stage == "assets"
+            ) and self.routes.get(stage) == "manual":
                 continue
             model = self.models.get(self.routes.get(stage, ""))
             if model is None or model.runtime not in runtimes:

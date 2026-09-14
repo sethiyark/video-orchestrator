@@ -354,7 +354,11 @@ def infer(spec, snapshot, payload, extras=None):
                 "Image generation requires Apple Metal (MPS); disable images if this host has none"
             )
         dtype = torch.float32 if device == "cpu" else torch.float16
-        generator = torch.Generator("cpu").manual_seed(42)
+        # One pipeline load serves every prompt in the batch; a single-prompt
+        # payload is the one-item case of the same contract.
+        prompts = payload.get("prompts") or [
+            {"prompt": payload["prompt"], "output_path": payload["output_path"], "seed": 42}
+        ]
         if runtime == "diffusers":
             from diffusers import StableDiffusionXLPipeline
 
@@ -367,15 +371,17 @@ def infer(spec, snapshot, payload, extras=None):
                 load["variant"] = "fp16"
             pipeline = StableDiffusionXLPipeline.from_pretrained(str(root), **load)
             _place_image_pipeline(pipeline, device)
-            kwargs = {
-                "width": 768,
-                "height": 768,
-                "num_inference_steps": spec["steps"],
-                "generator": generator,
-            }
-            if spec["steps"] <= 4:
-                kwargs["guidance_scale"] = 0.0
-            image = pipeline(payload["prompt"], **kwargs).images[0]
+
+            def generate(prompt, seed):
+                kwargs = {
+                    "width": IMAGE_WIDTH,
+                    "height": IMAGE_HEIGHT,
+                    "num_inference_steps": spec["steps"],
+                    "generator": torch.Generator("cpu").manual_seed(seed),
+                }
+                if spec["steps"] <= 4:
+                    kwargs["guidance_scale"] = 0.0
+                return pipeline(prompt, **kwargs).images[0]
         else:
             from diffusers import (
                 FluxPipeline,
@@ -408,18 +414,44 @@ def infer(spec, snapshot, payload, extras=None):
                 local_files_only=True,
             )
             _place_image_pipeline(pipeline, device)
-            image = pipeline(
-                payload["prompt"],
-                width=768,
-                height=768,
-                num_inference_steps=spec["steps"],
-                guidance_scale=0.0,
-                max_sequence_length=256,
-                generator=generator,
-            ).images[0]
-        image.save(payload["output_path"])
-        return {"width": 768, "height": 768, "prompt": payload["prompt"], "seed": 42}
+
+            def generate(prompt, seed):
+                return pipeline(
+                    prompt,
+                    width=IMAGE_WIDTH,
+                    height=IMAGE_HEIGHT,
+                    num_inference_steps=spec["steps"],
+                    guidance_scale=0.0,
+                    max_sequence_length=256,
+                    generator=torch.Generator("cpu").manual_seed(seed),
+                ).images[0]
+
+        results = []
+        for item in prompts:
+            seed = int(item.get("seed", 42))
+            try:
+                generate(item["prompt"], seed).save(item["output_path"])
+            except Exception as exc:  # noqa: BLE001 - one bad prompt must not lose the batch
+                results.append({"error": f"{type(exc).__name__}: {str(exc)[:300]}"})
+                continue
+            results.append(
+                {
+                    "width": IMAGE_WIDTH,
+                    "height": IMAGE_HEIGHT,
+                    "prompt": item["prompt"],
+                    "seed": seed,
+                }
+            )
+        if "prompts" not in payload:
+            if "error" in results[0]:
+                raise RuntimeError(results[0]["error"])
+            return results[0]
+        return {"results": results}
     raise ValueError(f"Unsupported runtime: {runtime}")
+
+
+# 16:9 plates for the renderer; SDXL-Turbo tolerates this size on 4 steps.
+IMAGE_WIDTH, IMAGE_HEIGHT = 1024, 576
 
 
 def _fail(result_path, message, kind="inference"):

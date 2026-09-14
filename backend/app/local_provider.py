@@ -19,7 +19,10 @@ from .models.hub import ModelHub, ModelNotReady
 from .models.runner import LocalRunner
 from .rendering import RemotionRenderer, RenderError, timeline, words
 from .schemas import (
+    COMPONENTS,
+    MAX_CHAPTERS,
     MAX_SCENE_SENTENCES,
+    ChapterPlan,
     Critic,
     Metadata,
     Outline,
@@ -30,7 +33,7 @@ from .schemas import (
     StoryboardChunk,
     Verification,
 )
-from .series.library import VISUAL_KINDS, SeriesLibrary
+from .series.library import BRAND_KINDS, VISUAL_KINDS, SeriesLibrary
 from .series.store import SeriesNotFound
 
 log = logging.getLogger(__name__)
@@ -52,6 +55,11 @@ MIN_SCRIPT_COVERAGE = 0.25
 SCRIPT_RETRY_ROUNDS = 1
 # Extra batches that re-ask only the sources whose quotes could not be located.
 RESEARCH_RETRY_ROUNDS = 1
+# Prompts per diffusion child: one pipeline load per batch, bounded by the
+# role's timeout_seconds.
+IMAGE_BATCH = 24
+# Every generated plate is rendered at 16:9; the renderer letterboxes others.
+IMAGE_SIZE = (1024, 576)
 # Dash-like characters count as word breaks when locating quotes.
 QUOTE_BREAKS = "-\u2010\u2011\u2012\u2013\u2014\u2015\u2212/"
 
@@ -92,10 +100,13 @@ class ManualStepRequired(RuntimeError):
     ``schema_names`` lets the manual-response endpoint validate the reply
     before accepting it, without re-deriving the request list."""
 
-    def __init__(self, message, prompt, schema_names):
+    def __init__(self, message, prompt, schema_names, extra=None):
         super().__init__(message)
         self.prompt = prompt
         self.schema_names = schema_names
+        # Stage-specific state the worker stores next to the prompt (for the
+        # image relay: the expected image ids and prompts).
+        self.extra = extra or {}
 
 
 def output_for(job, stage):
@@ -131,12 +142,34 @@ def with_series(job, stage, instructions, data):
     return instructions + SERIES_RULE, {**data, "series": guidance}
 
 
-def image_prompt(job, scene):
+def styled_prompt(job, prompt):
     """Append the series image style verbatim; it is text, not model instructions."""
     style = ((job.get("series_context") or {}).get("guidance") or {}).get("visual", {})
     style = style.get("image_style", "")
-    prompt = scene["props"]["prompt"]
     return f"{prompt}. Style: {style}" if style else prompt
+
+
+def image_requests(job, storyboard):
+    """Every image a storyboard needs, chapter heroes first so a budget cap
+    never leaves a chapter without a plate, then scenes in order."""
+    items = [
+        {
+            "id": chapter["chapter_id"],
+            "kind": "hero",
+            "prompt": styled_prompt(job, chapter["hero_prompt"]),
+        }
+        for chapter in storyboard.get("chapters", [])
+    ]
+    items += [
+        {
+            "id": scene["scene_id"],
+            "kind": "scene",
+            "prompt": styled_prompt(job, scene["image_prompt"]),
+        }
+        for scene in storyboard["scenes"]
+        if scene.get("image_prompt")
+    ]
+    return items
 
 
 def sentences(text):
@@ -473,6 +506,147 @@ class LocalProvider:
             "name": asset["name"],
         }
 
+    async def generate_images(self, job, stage, wanted):
+        """One diffusion child per IMAGE_BATCH prompts, one pipeline load each.
+        Images are cached across jobs by prompt + model + sampling; a hit is
+        copied into this job so its artifacts stay self-contained."""
+        route = self.config.routes[stage]
+        spec = self.config.models[route]
+        try:
+            revision = ModelHub(self.settings.cache_dir).resolve(spec)["revision"]
+        except ModelNotReady:
+            revision = None
+        model = {"spec": spec.model_dump(), "revision": revision}
+        results, pending = {}, []
+        for index, item in enumerate(wanted):
+            seed = 42 + index
+            key = self.artifacts.cache_key(item["prompt"], model, seed, IMAGE_SIZE)
+            hit = self.artifacts.cached_image(key)
+            if hit is not None:
+                results[item["id"]] = {
+                    **item,
+                    "seed": seed,
+                    "artifact": self.artifacts.adopt_copy(job["id"], hit),
+                    "cache": "hit",
+                    "provenance": {
+                        "role": route,
+                        "runtime": spec.runtime,
+                        "repo_id": spec.repo_id,
+                        "revision": revision,
+                    },
+                }
+            else:
+                pending.append((item, seed, key))
+        for start in range(0, len(pending), IMAGE_BATCH):
+            batch = pending[start : start + IMAGE_BATCH]
+            with tempfile.TemporaryDirectory(
+                dir=self.artifacts.folder(job["id"])
+            ) as directory:
+                prompts = [
+                    {
+                        "prompt": item["prompt"],
+                        "output_path": str(Path(directory) / f"{item['id']}.png"),
+                        "seed": seed,
+                    }
+                    for item, seed, _ in batch
+                ]
+                response = await self.runner.run(route, {"prompts": prompts}, job["id"])
+                outputs = response.get("results") or []
+                if len(outputs) != len(batch):
+                    raise RuntimeError("Local runtime returned the wrong number of images")
+                for (item, seed, key), entry, prompt in zip(batch, outputs, prompts):
+                    if "error" in entry:
+                        # Transient model failure: worker retry budget applies.
+                        raise RuntimeError(entry["error"])
+                    path = Path(prompt["output_path"])
+                    self.artifacts.store_cached(key, path)
+                    results[item["id"]] = {
+                        **item,
+                        "seed": seed,
+                        "artifact": self.artifacts.adopt(job["id"], path),
+                        "cache": "miss",
+                        "provenance": response["provenance"],
+                    }
+        return [results[item["id"]] for item in wanted]
+
+    async def relay_images(self, job, wanted):
+        """Serve images the user generated in their own Claude/Gemini chat and
+        uploaded through the dashboard, or park the job listing what is missing."""
+        state = (self._stage(job, "assets").get("output") or {}).get("manual") or {}
+        uploaded = state.get("images") or {}
+        skipped = set(state.get("skipped") or [])
+        results, missing = [], []
+        for item in wanted:
+            record = uploaded.get(item["id"])
+            if record:
+                # The upload endpoint adopted it; make sure it is still here.
+                self.artifacts.resolve(job["id"], record["artifact"]["id"])
+                results.append(
+                    {
+                        **item,
+                        "artifact": record["artifact"],
+                        "cache": "manual",
+                        "provenance": {"manual": True},
+                    }
+                )
+            elif item["id"] in skipped and item["kind"] == "scene":
+                results.append({**item, "fallback": "chapter_hero"})
+            else:
+                missing.append(item)
+        if missing:
+            raise ManualStepRequired(
+                f"Waiting for {len(missing)} manually generated image(s)",
+                prompt=manual.compose_image_prompt(job["title"], wanted, missing),
+                schema_names=[],
+                extra={
+                    "expected_images": wanted,
+                    "missing": [item["id"] for item in missing],
+                },
+            )
+        return results
+
+    def pin_library_asset(self, job, asset_id, kinds, what):
+        """sha256-pin an active series asset of an allowed kind, or fail closed."""
+        try:
+            asset = self.library.asset(job.get("series_id") or "", asset_id)
+        except SeriesNotFound:
+            asset = None
+        if not asset or asset["status"] != "active" or asset["kind"] not in kinds:
+            raise ReviewRequired(
+                f"{what} references series asset {asset_id}, which is not an active "
+                f"{' or '.join(kinds)} in this video's series"
+            )
+        return {"asset_id": asset_id, "sha256": asset["sha256"], "name": asset["name"]}
+
+    def pin_brand(self, job):
+        """The series bible's logo/intro/outro assets, pinned for this render."""
+        visual = ((job.get("series_context") or {}).get("guidance") or {}).get(
+            "visual"
+        ) or {}
+        brand = {}
+        for field, kinds in BRAND_KINDS.items():
+            if field == "music_asset_id" or not visual.get(field):
+                continue
+            kind = field.removesuffix("_asset_id")
+            brand[kind] = self.pin_library_asset(
+                job, visual[field], kinds, f"Series bible {field}"
+            )
+        return brand
+
+    def pin_music(self, job):
+        """The job's music bed (job render option, else the bible default)."""
+        visual = ((job.get("series_context") or {}).get("guidance") or {}).get(
+            "visual"
+        ) or {}
+        asset_id = (job.get("render") or {}).get("music_asset_id") or visual.get(
+            "music_asset_id"
+        )
+        if not asset_id:
+            return None
+        return self.pin_library_asset(
+            job, asset_id, BRAND_KINDS["music_asset_id"], "Music bed"
+        )
+
     def check_claim_ids(self, result, verified):
         ids = {claim["id"] for claim in verified}
         references = result.get("claim_ids", []) or [
@@ -678,26 +852,97 @@ class LocalProvider:
         )
         return {"summary": summary, "claims": claims, "provenance": provenance}
 
-    async def storyboard(self, job, assets):
-        """Plan scenes over numbered script sentences in bounded chunks, then
-        assemble the Storyboard with the exact narration text and scene ids."""
-        lines = sentences(current_script(job)["text"])
-        if not lines:
-            raise ReviewRequired("Storyboard needs a script with narration text")
+    async def plan_chapters(self, job, lines):
+        """LLM-planned chapters over every sentence, snapped to contiguous
+        coverage; a script too long for one request falls back to the script's
+        own outline sections as chapters."""
+        outline = [
+            {"title": section["title"], "purpose": section["purpose"]}
+            for section in output_for(job, "outline").get("sections", [])
+        ]
         instructions, series = with_series(
             job,
             "storyboard",
-            "Plan visual scenes for the numbered narration sentences supplied. Every "
-            "sentence belongs to exactly one scene, in order: the first scene starts at "
-            "the first supplied number, each next scene starts right after the previous "
-            "one ends, and the last scene ends at the last supplied number. A scene covers "
-            f"1 to {MAX_SCENE_SENTENCES} sentences. Do not repeat the narration; give only sentence numbers, a "
-            "component, and short props. Use only the allowed data schemas; never generate "
-            "code. Prefer DefinitionCard, AnimatedFlowDiagram, and BulletReveal. "
+            "Split the numbered narration sentences into chapters for a video. "
+            f"Return 1 to {MAX_CHAPTERS} chapters in order; the first starts at the "
+            "first supplied number, each next chapter starts right after the previous "
+            "one ends, and the last ends at the last supplied number. Each chapter "
+            "needs a short title, a one-line tagline, and a hero_prompt describing "
+            "one concrete illustration for it (subject, composition, mood; no artist "
+            "names, no text). The outline is a hint, not a constraint.",
+            {},
+        )
+        data = {**series, "sentences": [{"n": i + 1, "text": line} for i, line in enumerate(lines)], "outline": outline}
+        if self.config.routes["storyboard"] != "manual":
+            try:
+                self.budget("storyboard", data)
+            except ReviewRequired as exc:
+                sections = current_script(job).get("sections") or []
+                if not sections:
+                    raise
+                log.warning("Chapter plan skipped (%s); using outline sections", exc)
+                return self.chapters_from_sections(sections, lines)
+        (result,) = await self.llm_batch("storyboard", job, [(instructions, data, ChapterPlan)])
+        return cover_sentences(result["chapters"], 1, len(lines))
+
+    @staticmethod
+    def chapters_from_sections(sections, lines):
+        chapters, cursor = [], 1
+        for section in sections:
+            count = len(sentences(section["text"]))
+            if not count:
+                continue
+            chapters.append(
+                {
+                    "first_sentence": cursor,
+                    "last_sentence": min(cursor + count - 1, len(lines)),
+                    "title": section["title"][:80] or "Chapter",
+                    "tagline": "",
+                    "hero_prompt": f"An illustration of {section['title'][:200]}",
+                }
+            )
+            cursor += count
+        if not chapters:
+            raise ReviewRequired("Storyboard needs a script with narration text")
+        chapters[-1]["last_sentence"] = len(lines)
+        return cover_sentences(chapters[:MAX_CHAPTERS], 1, len(lines))
+
+    async def storyboard(self, job, assets):
+        """Plan chapters, then scenes per chapter over numbered script sentences
+        in bounded chunks, and assemble the Storyboard with the exact narration
+        text, scene ids and chapter spans."""
+        lines = sentences(current_script(job)["text"])
+        if not lines:
+            raise ReviewRequired("Storyboard needs a script with narration text")
+        chapters = await self.plan_chapters(job, lines)
+        images = self.config.images_enabled
+        instructions, series = with_series(
+            job,
+            "storyboard",
+            "Plan visual scenes for the numbered narration sentences supplied, which "
+            "belong to the chapter described. Every sentence belongs to exactly one "
+            "scene, in order: the first scene starts at the first supplied number, "
+            "each next scene starts right after the previous one ends, and the last "
+            f"scene ends at the last supplied number. A scene covers 1 to {MAX_SCENE_SENTENCES} "
+            "sentences. Do not repeat the narration; give only sentence numbers, a "
+            "component, short props, and an image_prompt. Use only the allowed data "
+            "schemas; never generate code to run. Pick the component that fits the "
+            "sentences: DefinitionCard for a definition, AnimatedFlowDiagram for "
+            "steps, BulletReveal for lists, CodeBlock for a short code example, "
+            "Terminal for a command session, Comparison for two options, "
+            "StatCounter for numbers, Timeline for a sequence in time, IconGrid for "
+            "a set of parts, Callout only for a quote that appears verbatim inside "
+            "one of the verified_claims (give its claim_id), ChapterTitle only for "
+            "the first sentence of a chapter as a hook, ImagePan when an "
+            "illustration carries the point, and Outro only for the very last "
+            "sentences of the whole video. "
             + (
-                "ImagePan may be used sparingly."
-                if self.config.images_enabled
-                else "Do not use ImagePan; image generation is disabled."
+                "Every scene needs a concrete image_prompt (subject, composition, "
+                "labels; no artist names, no long text) for a 16:9 illustration "
+                "shown behind or as the scene."
+                if images
+                else "Leave image_prompt empty and do not use ImagePan; image "
+                "generation is disabled."
             )
             + (
                 " SeriesAsset may show one of the listed series_assets by its exact asset_id."
@@ -706,43 +951,124 @@ class LocalProvider:
             ),
             {},
         )
-        chunks = [
-            range(start, min(start + STORYBOARD_CHUNK_SENTENCES, len(lines)))
-            for start in range(0, len(lines), STORYBOARD_CHUNK_SENTENCES)
+        verified = output_for(job, "verification").get("verified_claims", [])
+        quotes = [
+            {"claim_id": claim["id"], "quote": claim["quote"]} for claim in verified
         ]
-        requests = []
-        for chunk in chunks:
-            data = {
-                **series,
-                "sentences": [{"n": i + 1, "text": lines[i]} for i in chunk],
-            }
-            if assets:
-                data["series_assets"] = assets
-            requests.append((instructions, data, StoryboardChunk))
+        requests, chunks = [], []
+        for number, chapter in enumerate(chapters, 1):
+            first, last = chapter["first_sentence"], chapter["last_sentence"]
+            for start in range(first, last + 1, STORYBOARD_CHUNK_SENTENCES):
+                chunk = range(start, min(start + STORYBOARD_CHUNK_SENTENCES, last + 1))
+                data = {
+                    **series,
+                    "chapter": {
+                        "number": number,
+                        "count": len(chapters),
+                        "title": chapter["title"],
+                        "tagline": chapter["tagline"],
+                        "is_last": number == len(chapters),
+                    },
+                    "sentences": [{"n": i, "text": lines[i - 1]} for i in chunk],
+                    "available_components": list(COMPONENTS),
+                    "verified_claims": quotes,
+                }
+                if assets:
+                    data["series_assets"] = assets
+                requests.append((instructions, data, StoryboardChunk))
+                chunks.append((number - 1, chunk))
         results = await self.llm_batch("storyboard", job, requests)
-        scenes = []
-        for chunk, result in zip(chunks, results):
-            planned = cover_sentences(result["scenes"], chunk.start + 1, chunk.stop)
+        scenes, spans = [], [[None, None] for _ in chapters]
+        for (index, chunk), result in zip(chunks, results):
+            planned = cover_sentences(result["scenes"], chunk.start, chunk.stop - 1)
             for scene in planned:
                 text = " ".join(
                     lines[scene["first_sentence"] - 1 : scene["last_sentence"]]
                 )
+                scene_id = f"scene_{len(scenes) + 1:03d}"
+                prompt = scene.get("image_prompt", "")
+                if scene["component"] == "ImagePan" and not prompt:
+                    prompt = scene["props"]["prompt"][:300]
                 scenes.append(
                     {
-                        "scene_id": f"scene_{len(scenes) + 1:03d}",
+                        "scene_id": scene_id,
                         "narration_text": text,
                         "duration_seconds": round(
                             max(len(text.split()) / WORDS_PER_SECOND, 2), 1
                         ),
                         "component": scene["component"],
                         "props": scene["props"],
+                        "image_prompt": prompt if images else "",
                     }
                 )
+                if spans[index][0] is None:
+                    spans[index][0] = scene_id
+                spans[index][1] = scene_id
+        assembled = [
+            {
+                "chapter_id": f"chapter_{index + 1:02d}",
+                "title": chapter["title"],
+                "tagline": chapter["tagline"],
+                "first_scene": first,
+                "last_scene": last,
+                "hero_prompt": chapter["hero_prompt"],
+                "accent": index % 12,
+            }
+            for index, (chapter, (first, last)) in enumerate(zip(chapters, spans))
+            if first is not None
+        ]
         try:
-            storyboard = Storyboard.model_validate({"scenes": scenes}).model_dump()
+            storyboard = Storyboard.model_validate(
+                {"scenes": scenes, "chapters": assembled}
+            ).model_dump()
         except ValueError as exc:
             raise ReviewRequired(f"Storyboard is out of bounds: {exc}") from exc
         return {**storyboard, "provenance": results[0]["provenance"]}
+
+    def check_storyboard(self, job, result, assets):
+        """Structural rules a planned storyboard must meet; each failure names
+        the scene and rewinds to storyboard."""
+        scenes, chapters = result["scenes"], result["chapters"]
+        if len({scene["scene_id"] for scene in scenes}) != len(scenes):
+            raise ReviewRequired("Storyboard has duplicate scene ids")
+        allowed = {asset["id"] for asset in assets}
+        verified = {
+            claim["id"]: claim
+            for claim in output_for(job, "verification").get("verified_claims", [])
+        }
+        openers = {chapter["first_scene"] for chapter in chapters}
+        images = self.config.images_enabled
+
+        def fail(scene, why):
+            raise ReviewRequired(
+                f"Storyboard scene {scene['scene_id']} {why}",
+                {"scene_id": scene["scene_id"]},
+                rewind_to="storyboard",
+            )
+
+        for index, scene in enumerate(scenes):
+            kind = scene["component"]
+            if kind == "SeriesAsset" and scene["props"]["asset_id"] not in allowed:
+                raise ReviewRequired(
+                    f"Storyboard scene {scene['scene_id']} references a series asset "
+                    "that is not an active image or logo in this video's series"
+                )
+            if kind == "ImagePan" and not images:
+                raise ReviewRequired(
+                    "Storyboard requested images while image generation is disabled"
+                )
+            if kind == "ChapterTitle" and scene["scene_id"] not in openers:
+                fail(scene, "uses ChapterTitle outside a chapter's first scene")
+            if kind == "Outro" and index != len(scenes) - 1:
+                fail(scene, "uses Outro before the final scene")
+            if kind == "Callout":
+                claim = verified.get(scene["props"]["claim_id"])
+                if not claim or not locate_quote(scene["props"]["quote"], claim["quote"]):
+                    fail(scene, "quotes text that is not inside its verified claim")
+            if images and not scene.get("image_prompt"):
+                fail(scene, "is missing an image_prompt")
+        if scenes[-1]["component"] != "Outro":
+            fail(scenes[-1], "must be an Outro closing the video")
 
     async def execute(self, stage, job, attempt: int = 0):
         corrections = (job.get("corrections") or {}).get(stage) or {}
@@ -999,65 +1325,57 @@ class LocalProvider:
         if stage == "storyboard":
             assets = self.series_assets(job)
             result = await self.storyboard(job, assets)
-            scenes = result["scenes"]
-            if len({scene["scene_id"] for scene in scenes}) != len(scenes):
-                raise ReviewRequired("Storyboard has duplicate scene ids")
-            allowed = {asset["id"] for asset in assets}
-            for scene in scenes:
-                if (
-                    scene["component"] == "SeriesAsset"
-                    and scene["props"]["asset_id"] not in allowed
-                ):
-                    raise ReviewRequired(
-                        f"Storyboard scene {scene['scene_id']} references a series asset "
-                        "that is not an active image or logo in this video's series"
-                    )
-            if not self.config.images_enabled and any(
-                scene["component"] == "ImagePan" for scene in scenes
-            ):
-                raise ReviewRequired(
-                    "Storyboard requested images while image generation is disabled"
-                )
+            self.check_storyboard(job, result, assets)
             return result
         if stage == "assets":
-            scenes = output_for(job, "storyboard")["scenes"]
-            images = [scene for scene in scenes if scene["component"] == "ImagePan"]
+            board = output_for(job, "storyboard")
+            scenes = board["scenes"]
             # Re-check at pin time: an asset may have been archived since the storyboard.
             pinned = [
                 self.pin_series_asset(job, scene)
                 for scene in scenes
                 if scene["component"] == "SeriesAsset"
             ]
-            if not images:
+            extras = {"brand": self.pin_brand(job), "music": self.pin_music(job)}
+            if not self.config.images_enabled:
                 return {
                     "images": [],
                     "series_assets": pinned,
+                    **extras,
+                    "message": "Image generation is disabled; programmatic scenes only",
+                }
+            requested = image_requests(job, board)
+            if not requested:
+                return {
+                    "images": [],
+                    "series_assets": pinned,
+                    **extras,
                     "message": "Programmatic scenes need no diffusion assets",
                 }
-            if (
-                not self.config.images_enabled
-                or len(images) > self.config.governor.max_images
-            ):
-                raise ReviewRequired("Storyboard exceeds the configured image budget")
-            generated = []
-            for scene in images:
-                with tempfile.TemporaryDirectory(
-                    dir=self.artifacts.folder(job["id"])
-                ) as directory:
-                    path = Path(directory) / "image.png"
-                    response = await self.runner.run(
-                        self.config.routes[stage],
-                        {"prompt": image_prompt(job, scene), "output_path": str(path)},
-                        job["id"],
-                    )
-                    generated.append(
-                        {
-                            "scene_id": scene["scene_id"],
-                            **response,
-                            "artifact": self.artifacts.adopt(job["id"], path),
-                        }
-                    )
-            return {"images": generated, "series_assets": pinned}
+            cap = min(
+                self.config.governor.max_images,
+                self.settings.channel_governor.budgets.max_image_generations_per_video,
+            )
+            heroes = sum(item["kind"] == "hero" for item in requested)
+            if heroes > cap:
+                raise ReviewRequired(
+                    f"Storyboard has {heroes} chapters but the image budget allows {cap}"
+                )
+            wanted, beyond = requested[:cap], requested[cap:]
+            if self.config.routes[stage] == "manual":
+                images = await self.relay_images(job, wanted)
+            else:
+                images = await self.generate_images(job, stage, wanted)
+            images += [
+                {"id": item["id"], "kind": item["kind"], "fallback": "chapter_hero"}
+                for item in beyond
+            ]
+            return {
+                "images": images,
+                "series_assets": pinned,
+                **extras,
+                "image_budget": cap,
+            }
         if stage == "narration":
             with tempfile.TemporaryDirectory(
                 dir=self.artifacts.folder(job["id"])

@@ -29,7 +29,8 @@ stripping is in the runner).
 `ModelConfig` forbids extra keys; stage routes must match required runtimes:
 LLM stages → `llama_cpp`; narration → `kokoro | qwen_tts`; alignment →
 `whisper | ctc_aligner`; similarity → `sentence_transformers`; assets →
-`diffusers | diffusers_gguf` when `images_enabled`. Any LLM stage
+`diffusers | diffusers_gguf` or `"manual"` (the image relay, the default in
+every shipped profile) when `images_enabled`. Any LLM stage
 (`research`/`verification`/`outline`/`script`/`critique`/`storyboard`/`metadata`)
 may instead route to `"manual"` — relayed through a human pasting into their
 own Claude/Gemini chat instead of a local model — with no matching
@@ -44,8 +45,12 @@ own Claude/Gemini chat instead of a local model — with no matching
 `Governor` (in `models.yaml`): `max_attempts` (worker retries per stage),
 `critique_rounds`, `critic_temperature`, `min_script_score`, `max_rewinds`
 (times the worker sends a failed stage back to an earlier one with
-corrections, default 2; 0 disables), `min_research_confidence`, `max_similarity`, `max_images`,
-`min_narration_fidelity`.
+corrections, default 2; 0 disables), `min_research_confidence`, `max_similarity`, `max_images`
+(per-video image budget, 0–120; the assets stage also honours the channel
+Governor's `budgets.max_image_generations_per_video`),
+`min_narration_fidelity`. `models.yaml` keeps `images_enabled: false`; the
+Mac and CUDA profiles enable images with `assets: manual` and
+`max_images: 120`.
 
 `MODEL_CONFIG` selects a hardware profile: `config/models.mac.yaml` or
 `config/models.cuda-8gb.yaml` (see [local-models.md](local-models.md)).

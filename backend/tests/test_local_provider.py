@@ -435,6 +435,32 @@ def card(first, last):
         "last_sentence": last,
         "component": "DefinitionCard",
         "props": {"title": "DNS", "body": "Names to addresses"},
+        "image_prompt": "A labeled diagram of a DNS lookup",
+    }
+
+
+def outro(first, last):
+    return {
+        "first_sentence": first,
+        "last_sentence": last,
+        "component": "Outro",
+        "props": {"title": "Recap", "takeaways": ["Names map to addresses"]},
+        "image_prompt": "A calm closing illustration of a network",
+    }
+
+
+def chapters(*spans):
+    return {
+        "chapters": [
+            {
+                "first_sentence": first,
+                "last_sentence": last,
+                "title": f"Chapter {index + 1}",
+                "tagline": "One idea",
+                "hero_prompt": "A wide illustration of resolvers talking",
+            }
+            for index, (first, last) in enumerate(spans)
+        ]
     }
 
 
@@ -442,8 +468,9 @@ def test_storyboard_plans_sentence_chunks_and_copies_narration(tmp_path):
     text = " ".join(f"Sentence number {i} explains one DNS step." for i in range(1, 21))
     provider, runner, job = setup(
         tmp_path,
-        [{"scenes": [card(1, 4), card(5, 8), card(9, 16)]}]
-        + [{"scenes": [card(17, 20)]}],
+        [chapters((1, 20))]
+        + [{"scenes": [card(1, 4), card(5, 8), card(9, 16)]}]
+        + [{"scenes": [outro(17, 20)]}],
     )
     complete(job, "script", {"text": text, "claim_ids": ["c1"], "provenance": {}})
     with pytest.raises(ValueError, match="1-6 sentences"):
@@ -452,29 +479,48 @@ def test_storyboard_plans_sentence_chunks_and_copies_narration(tmp_path):
 
     runner.outputs = iter(
         [
+            chapters((1, 20)),
             {"scenes": [card(1, 4), card(5, 8), card(9, 12), card(13, 16)]},
-            {"scenes": [card(17, 18), card(19, 20)]},
+            {"scenes": [card(17, 18), outro(19, 20)]},
         ]
     )
     runner.calls.clear()
     result = asyncio.run(provider.execute("storyboard", job))
-    # One model load, one request per 16-sentence chunk; the model never sees
-    # or re-emits a whole script.
-    ((role, payload),) = runner.calls
+    # Two model loads: one chapter plan over every sentence, then one request
+    # per 16-sentence chunk; the model never re-emits a whole script.
+    (plan_role, plan), (role, payload) = runner.calls
+    assert plan_role == "quality" and len(plan["requests"]) == 1
+    assert plan["requests"][0]["schema_name"] == "ChapterPlan"
     assert role == "quality" and len(payload["requests"]) == 2
     assert {r["schema_name"] for r in payload["requests"]} == {"StoryboardChunk"}
     second = json.loads(payload["requests"][1]["messages"][1]["content"])
     assert [s["n"] for s in second["sentences"]] == [17, 18, 19, 20]
+    assert second["chapter"]["title"] == "Chapter 1"
+    assert "CodeBlock" in second["available_components"]
     scenes = result["scenes"]
     assert [s["scene_id"] for s in scenes] == [f"scene_{i:03d}" for i in range(1, 7)]
     assert " ".join(s["narration_text"] for s in scenes) == text
     assert scenes[0]["duration_seconds"] == round(28 / 2.5, 1)
+    assert result["chapters"] == [
+        {
+            "chapter_id": "chapter_01",
+            "title": "Chapter 1",
+            "tagline": "One idea",
+            "first_scene": "scene_001",
+            "last_scene": "scene_006",
+            "hero_prompt": "A wide illustration of resolvers talking",
+            "accent": 0,
+        }
+    ]
+    # Images are disabled in the default profile: prompts are dropped.
+    assert all(scene["image_prompt"] == "" for scene in scenes)
 
     # Off-by-one boundaries are snapped, not rejected: an overlap (5-8 then
     # 8-12) trims the later scene, a gap (12 then 14) and a short tail (15)
     # are absorbed, and a scene left with nothing to narrate is dropped.
     runner.outputs = iter(
         [
+            chapters((1, 20)),
             {
                 "scenes": [
                     card(1, 4),
@@ -484,7 +530,7 @@ def test_storyboard_plans_sentence_chunks_and_copies_narration(tmp_path):
                     card(9, 10),
                 ]
             },
-            {"scenes": [card(18, 20)]},
+            {"scenes": [outro(18, 20)]},
         ]
     )
     result = asyncio.run(provider.execute("storyboard", job))
@@ -501,12 +547,130 @@ def test_storyboard_plans_sentence_chunks_and_copies_narration(tmp_path):
     # numbering) is still a review error.
     runner.outputs = iter(
         [
+            chapters((1, 20)),
             {"scenes": [card(1, 4), card(5, 8), card(9, 12), card(13, 16)]},
-            {"scenes": [card(1, 4)]},
+            {"scenes": [outro(1, 4)]},
         ]
     )
     with pytest.raises(ReviewRequired, match="sentences 17-20"):
         asyncio.run(provider.execute("storyboard", job))
+
+
+def test_storyboard_chunks_never_cross_chapters(tmp_path):
+    text = " ".join(f"Sentence number {i} explains one DNS step." for i in range(1, 21))
+    provider, runner, job = setup(
+        tmp_path,
+        [
+            chapters((1, 6), (7, 20)),
+            {"scenes": [card(1, 3), card(4, 6)]},
+            {"scenes": [card(7, 12), card(13, 18), outro(19, 20)]},
+        ],
+    )
+    complete(job, "script", {"text": text, "claim_ids": ["c1"], "provenance": {}})
+    result = asyncio.run(provider.execute("storyboard", job))
+    payload = runner.calls[1][1]
+    spans = [
+        [s["n"] for s in json.loads(r["messages"][1]["content"])["sentences"]]
+        for r in payload["requests"]
+    ]
+    assert spans == [list(range(1, 7)), list(range(7, 21))]
+    assert [(c["first_scene"], c["last_scene"], c["accent"]) for c in result["chapters"]] == [
+        ("scene_001", "scene_002", 0),
+        ("scene_003", "scene_005", 1),
+    ]
+
+
+def test_storyboard_falls_back_to_outline_sections_when_too_long(tmp_path):
+    text = " ".join(f"Sentence number {i} explains one DNS step." for i in range(1, 9))
+    provider, runner, job = setup(
+        tmp_path,
+        [{"scenes": [card(1, 4)]}, {"scenes": [outro(5, 8)]}],
+    )
+    complete(
+        job,
+        "script",
+        {
+            "text": text,
+            "claim_ids": ["c1"],
+            "sections": [
+                {"title": "Basics", "text": " ".join(text.split(". ")[:4]) + ".", "claim_ids": ["c1"]},
+                {"title": "Caching", "text": " ".join(text.split(". ")[4:]), "claim_ids": ["c1"]},
+            ],
+        },
+    )
+    real_budget = provider.budget
+
+    def budget(stage, data):
+        # Only the whole-script chapter request is over budget here.
+        if "outline" in data:
+            raise ReviewRequired("storyboard input exceeds the model context budget")
+        real_budget(stage, data)
+
+    provider.budget = budget
+    result = asyncio.run(provider.execute("storyboard", job))
+    assert [c["title"] for c in result["chapters"]] == ["Basics", "Caching"]
+    assert all(r["schema_name"] == "StoryboardChunk" for r in runner.calls[0][1]["requests"])
+
+
+def test_storyboard_structure_rules_rewind(tmp_path):
+    text = "First sentence here. Second sentence here. Third sentence here."
+    provider, runner, job = setup(tmp_path, [])
+    complete(job, "script", {"text": text, "claim_ids": ["c1"], "provenance": {}})
+    complete(
+        job,
+        "verification",
+        {
+            "verified_claims": [
+                {
+                    "id": "c1",
+                    "text": "DNS",
+                    "source_id": "s1",
+                    "quote": "DNS maps domain names to IP addresses.",
+                }
+            ]
+        },
+    )
+
+    def run(*scenes):
+        runner.outputs = iter([chapters((1, 3)), {"scenes": list(scenes)}])
+        return asyncio.run(provider.execute("storyboard", job))
+
+    with pytest.raises(ReviewRequired, match="must be an Outro") as info:
+        run(card(1, 2), card(3, 3))
+    assert info.value.rewind_to == "storyboard"
+    with pytest.raises(ReviewRequired, match="Outro before the final"):
+        run(outro(1, 2), outro(3, 3))
+    title = {**card(1, 1), "component": "ChapterTitle", "props": {"title": "DNS"}}
+    with pytest.raises(ReviewRequired, match="ChapterTitle outside"):
+        run(card(1, 1), {**title, "first_sentence": 2, "last_sentence": 2}, outro(3, 3))
+    callout = {
+        **card(2, 2),
+        "component": "Callout",
+        "props": {"title": "Quote", "quote": "made up words", "claim_id": "c1"},
+    }
+    with pytest.raises(ReviewRequired, match="not inside its verified claim"):
+        run(title, callout, outro(3, 3))
+    callout["props"]["quote"] = "maps domain names to IP"
+    result = run(title, callout, outro(3, 3))
+    assert [s["component"] for s in result["scenes"]] == ["ChapterTitle", "Callout", "Outro"]
+
+    provider.settings.models.images_enabled = True
+    try:
+        with pytest.raises(ReviewRequired, match="missing an image_prompt"):
+            run(title, {**card(2, 2), "image_prompt": ""}, outro(3, 3))
+        picture = {
+            **card(2, 2),
+            "component": "ImagePan",
+            "props": {"title": "Lookup", "prompt": "A labeled diagram of a DNS lookup path"},
+            "image_prompt": "",
+        }
+        result = run(title, picture, outro(3, 3))
+        # ImagePan's own prompt doubles as its image prompt.
+        assert result["scenes"][1]["image_prompt"] == "A labeled diagram of a DNS lookup path"
+        assert result["scenes"][0]["image_prompt"] == card(1, 1)["image_prompt"]
+        assert "Every scene needs a concrete image_prompt" in json.dumps(runner.calls[-1][1])
+    finally:
+        provider.settings.models.images_enabled = False
 
 
 def test_worker_retry_attempt_shifts_default_llm_seed(tmp_path):
@@ -515,12 +679,14 @@ def test_worker_retry_attempt_shifts_default_llm_seed(tmp_path):
     unvaried retry of a validation failure reproduces the identical bad output
     every time instead of giving the model a real second chance."""
     text = " ".join(f"Sentence number {i} explains one DNS step." for i in range(1, 5))
-    provider, runner, job = setup(tmp_path, [{"scenes": [card(1, 4)]}])
+    provider, runner, job = setup(
+        tmp_path, [chapters((1, 4)), {"scenes": [outro(1, 4)]}]
+    )
     complete(job, "script", {"text": text, "claim_ids": ["c1"], "provenance": {}})
     asyncio.run(provider.execute("storyboard", job, attempt=0))
     seed_attempt_0 = runner.calls[0][1]["requests"][0]["seed"]
 
-    runner.outputs = iter([{"scenes": [card(1, 4)]}])
+    runner.outputs = iter([chapters((1, 4)), {"scenes": [outro(1, 4)]}])
     runner.calls.clear()
     asyncio.run(provider.execute("storyboard", job, attempt=2))
     seed_attempt_2 = runner.calls[0][1]["requests"][0]["seed"]

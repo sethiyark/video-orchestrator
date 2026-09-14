@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..schemas import Source
-from .library import AssetKind, SeriesLibrary, UnsupportedMedia
+from .library import BRAND_KINDS, AssetKind, SeriesLibrary, UnsupportedMedia
 from .schema import SeriesBible, ThemeGuidance
 from .store import SeriesConflict, SeriesNotFound, SeriesStore
 
@@ -153,6 +153,20 @@ def series_router(
 
     @router.put("/{series_id}/bible")
     async def put_bible(series_id: str, body: SeriesBible):
+        for field, kinds in BRAND_KINDS.items():
+            asset_id = getattr(body.visual, field)
+            if asset_id is None:
+                continue
+            try:
+                asset = library.asset(series_id, asset_id)
+            except SeriesNotFound:
+                asset = None
+            if not asset or asset["status"] != "active" or asset["kind"] not in kinds:
+                raise HTTPException(
+                    422,
+                    f"visual.{field} must name an active {' or '.join(kinds)} asset "
+                    "in this series' library",
+                )
         return guard(series.put_bible, series_id, body)
 
     @router.get("/{series_id}/bible/versions")

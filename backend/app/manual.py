@@ -11,6 +11,7 @@ import json
 from pydantic import ValidationError
 
 from .schemas import (
+    ChapterPlan,
     Critic,
     Metadata,
     Outline,
@@ -22,7 +23,16 @@ from .schemas import (
 
 SCHEMAS = {
     schema.__name__: schema
-    for schema in (Research, Verification, Outline, ScriptSection, Critic, StoryboardChunk, Metadata)
+    for schema in (
+        Research,
+        Verification,
+        Outline,
+        ScriptSection,
+        Critic,
+        ChapterPlan,
+        StoryboardChunk,
+        Metadata,
+    )
 }
 
 
@@ -82,3 +92,28 @@ def parse_payload(raw_text: str, schema_names: list[str]) -> list[dict]:
         except ValidationError as exc:
             raise ValueError(f"Item {index + 1} failed {name} validation: {exc}") from exc
     return results
+
+
+def compose_image_prompt(title: str, expected: list[dict], missing: list[dict]) -> str:
+    """A document the user works through in their own image-capable chat:
+    every image the video still needs, by id, with its full prompt."""
+    done = len(expected) - len(missing)
+    lines = [
+        f"Images for the video \"{title}\": {len(missing)} of {len(expected)} still needed"
+        + (f" ({done} uploaded)." if done else "."),
+        "",
+        (
+            "For each item below, generate ONE 16:9 illustration (1536x864 or "
+            "larger; no text, watermarks, or logos), save it as PNG, JPEG, or "
+            "WebP, and upload it in the dashboard under that item's id. Chapter "
+            "heroes (chapter_NN) are required; a scene image can be skipped and "
+            "will reuse its chapter hero."
+        ),
+        "",
+    ]
+    for index, item in enumerate(missing, 1):
+        kind = "chapter hero" if item["kind"] == "hero" else "scene image"
+        lines.append(f"{index}. [{item['id']}] ({kind})")
+        lines.append(f"   Prompt: {item['prompt']}")
+        lines.append("")
+    return "\n".join(lines).rstrip()

@@ -24,6 +24,13 @@ MEDIA_TYPES = {
 ASSET_KINDS = ("logo", "image", "audio", "music", "video", "other")
 AssetKind = Literal["logo", "image", "audio", "music", "video", "other"]
 VISUAL_KINDS = ("logo", "image")
+# Series bible brand-kit field → asset kinds it may reference.
+BRAND_KINDS = {
+    "logo_asset_id": ("logo", "image"),
+    "intro_asset_id": ("logo", "image"),
+    "outro_asset_id": ("logo", "image"),
+    "music_asset_id": ("music", "audio"),
+}
 ASSET_KEYS = (
     "id",
     "series_id",
@@ -43,7 +50,7 @@ class UnsupportedMedia(ValueError):
     pass
 
 
-def _matches(content_type: str, data: bytes) -> bool:
+def matches_media(content_type: str, data: bytes) -> bool:
     """Magic-byte check so a renamed HTML file cannot pose as an image."""
     if content_type == "image/png":
         return data.startswith(b"\x89PNG\r\n\x1a\n")
@@ -80,7 +87,7 @@ class SeriesLibrary:
                 f"Unsupported media type {content_type or 'unknown'}; "
                 f"allowed: {', '.join(sorted(MEDIA_TYPES))}"
             )
-        if not data or not _matches(content_type, data):
+        if not data or not matches_media(content_type, data):
             raise UnsupportedMedia(f"File content is not valid {content_type}")
         digest = hashlib.sha256(data).hexdigest()
         key = f"series/{series_id}/{digest}{MEDIA_TYPES[content_type]}"

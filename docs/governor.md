@@ -22,7 +22,9 @@ Helpers: `may_publish_without_human`, `may_auto_reply`, `may_use_external_llm`,
 ## How it is called
 
 `Settings.channel_governor`. Exposed (redacted) on `GET /api/system`. Local
-pipeline uses content thresholds and attempt budgets.
+pipeline uses content thresholds and attempt budgets;
+`budgets.max_image_generations_per_video` (default 120, max 120) caps the
+assets stage together with the model profile's `max_images`.
 
 ## Invariants
 

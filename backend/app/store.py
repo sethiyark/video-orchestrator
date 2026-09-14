@@ -231,6 +231,33 @@ class Store:
             job_row.updated_at = now()
         return self.get(job_id)
 
+    def record_manual_images(self, job_id, stage_name, images=None, skipped=None):
+        """Attach uploaded images (id → record) and skipped ids to a stage parked
+        on the image relay; re-queue the job once every expected id is
+        uploaded or skipped. Returns None when the stage isn't parked."""
+        with Session(self.engine) as session, session.begin():
+            job_row = session.get(VideoJob, job_id)
+            if job_row is None or job_row.status != "awaiting_manual_input":
+                return None
+            stage_row = session.get(StageRecord, (job_id, stage_name))
+            if stage_row is None or stage_row.status != "awaiting_input":
+                return None
+            manual = dict((stage_row.output or {}).get("manual") or {})
+            expected = [item["id"] for item in manual.get("expected_images") or []]
+            if not expected:
+                return None
+            stored = {**(manual.get("images") or {}), **(images or {})}
+            done = sorted(set(manual.get("skipped") or []) | set(skipped or []))
+            missing = [i for i in expected if i not in stored and i not in done]
+            manual.update(images=stored, skipped=done, missing=missing)
+            stage_row.output = {**(stage_row.output or {}), "manual": manual}
+            if not missing:
+                stage_row.status = "pending"
+                job_row.status = "queued"
+                job_row.error = None
+                job_row.updated_at = now()
+        return self.get(job_id)
+
     def delete(self, job_id):
         """Remove a job and its attempts/stages. Returns False if it never existed."""
         with Session(self.engine) as session, session.begin():

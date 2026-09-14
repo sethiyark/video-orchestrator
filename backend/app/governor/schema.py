@@ -49,7 +49,7 @@ class ExternalLlmSection(Strict):
 
 class BudgetSection(Strict):
     max_llm_attempts_per_stage: int = Field(default=3, ge=1, le=8)
-    max_image_generations_per_video: int = Field(default=20, ge=0, le=100)
+    max_image_generations_per_video: int = Field(default=120, ge=0, le=120)
     max_external_api_cost_per_day_usd: float = Field(default=0.0, ge=0)
     max_external_api_cost_per_video_usd: float = Field(default=0.0, ge=0)
 

@@ -36,8 +36,17 @@ tests.
 - Narration whose alignment fidelity is below `min_narration_fidelity` fails
   closed; alignment always receives the script text.
 - Inputs over the route's context budget fail closed before a model load.
-- Storyboard components are a closed enum; no LLM shell/code execution.
-  `SeriesAsset` references an existing active series image/logo by id only.
+- Storyboard components are a closed enum (`schemas.COMPONENTS`); no LLM
+  shell/code execution. `CodeBlock`/`Terminal` text is displayed, never run;
+  icons and code languages are closed enums. `SeriesAsset` references an
+  existing active series image/logo by id only; brand-kit plates and the
+  music bed are active series assets pinned by sha256.
+- Chapters cover every scene exactly once and the last scene is an `Outro`;
+  a `Callout` quote must be located inside the verified claim it cites.
+- Images reach the renderer only as job artifacts: generated locally,
+  copied from the prompt-keyed cache (never keyed by URL or path), or
+  uploaded through the image relay after a magic-byte and size check. The
+  app never calls Claude/Gemini for images; the user relays in their own tab.
 - Scripts, and each script section, far shorter than their outline fail
   closed; one targeted retry batch runs first.
 - Storyboard scenes reference script sentences; narration text is copied by

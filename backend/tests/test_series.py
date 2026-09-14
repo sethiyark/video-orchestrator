@@ -267,12 +267,17 @@ def test_local_prompts_receive_stage_specific_series_guidance(tmp_path):
     scene = {
         "first_sentence": 1,
         "last_sentence": 1,
-        "component": "DefinitionCard",
-        "props": {"title": "DNS", "body": "Names to addresses"},
+        "component": "Outro",
+        "props": {"title": "DNS", "takeaways": ["Names to addresses"]},
+    }
+    plan = {
+        "chapters": [
+            {"first_sentence": 1, "last_sentence": 1, "title": "DNS", "hero_prompt": "A resolver diagram"}
+        ]
     }
     provider, runner, job = local_series_job(
         tmp_path,
-        [{"sections": [section]}, script, *[critic] * 5, {"scenes": [scene]}],
+        [{"sections": [section]}, script, *[critic] * 5, plan, {"scenes": [scene]}],
     )
     complete(job, "verification", {"verified_claims": verified})
 
@@ -281,8 +286,9 @@ def test_local_prompts_receive_stage_specific_series_guidance(tmp_path):
             complete(job, stage, await provider.execute(stage, job))
 
     asyncio.run(scenario())
-    outline, script_call, critique, storyboard = runner.calls
+    outline, script_call, critique, plan_call, storyboard = runner.calls
     system, data = messages(outline)
+    assert set(messages(plan_call)[1]["series"]) == {"visual"}
     assert "never evidence" in system
     assert set(data["series"]) == {"voice", "glossary"}
     assert messages(script_call)[1]["series"]["voice"]["tone"] == "dry"
@@ -560,9 +566,22 @@ def storyboard_scene(asset_id):
     }
 
 
+OUTRO = {
+    "first_sentence": 2,
+    "last_sentence": 2,
+    "component": "Outro",
+    "props": {"title": "Recap", "takeaways": ["Names map to addresses"]},
+}
+PLAN = {
+    "chapters": [
+        {"first_sentence": 1, "last_sentence": 2, "title": "DNS", "hero_prompt": "A resolver diagram"}
+    ]
+}
+
+
 def test_series_asset_scene_is_validated_and_pinned(tmp_path):
     script = {
-        "text": "DNS maps names to addresses for every lookup you make.",
+        "text": "DNS maps names to addresses for every lookup you make. That is it.",
         "claim_ids": ["c1"],
     }
     provider, runner, job = local_series_job(tmp_path, [])
@@ -576,11 +595,11 @@ def test_series_asset_scene_is_validated_and_pinned(tmp_path):
 
     # A non-visual asset or an unknown id fails closed.
     for bad in (music["id"], "not-an-asset"):
-        runner.outputs = iter([{"scenes": [storyboard_scene(bad)]}])
+        runner.outputs = iter([PLAN, {"scenes": [storyboard_scene(bad), OUTRO]}])
         with pytest.raises(ReviewRequired, match="series asset"):
             asyncio.run(provider.execute("storyboard", job))
 
-    runner.outputs = iter([{"scenes": [storyboard_scene(logo["id"])]}])
+    runner.outputs = iter([PLAN, {"scenes": [storyboard_scene(logo["id"]), OUTRO]}])
     storyboard = asyncio.run(provider.execute("storyboard", job))
     system, data = messages(runner.calls[-1])
     assert "SeriesAsset may show" in system
@@ -605,9 +624,82 @@ def test_standalone_storyboard_forbids_series_assets(tmp_path):
     provider, runner, job = local_series_job(tmp_path, [])
     job["series_context"], job["series_id"] = None, None
     complete(
-        job, "script", {"text": "DNS maps names to addresses.", "claim_ids": ["c1"]}
+        job,
+        "script",
+        {"text": "DNS maps names to addresses. That is it.", "claim_ids": ["c1"]},
     )
-    runner.outputs = iter([{"scenes": [storyboard_scene("anything")]}])
+    runner.outputs = iter([PLAN, {"scenes": [storyboard_scene("anything"), OUTRO]}])
     with pytest.raises(ReviewRequired, match="series asset"):
         asyncio.run(provider.execute("storyboard", job))
-    assert "Do not use SeriesAsset" in messages(runner.calls[0])[0]
+    assert "Do not use SeriesAsset" in messages(runner.calls[1])[0]
+
+
+def test_brand_kit_and_music_are_validated_and_pinned(tmp_path):
+    """Bible brand ids must name active assets of the right kind; the assets
+    stage pins them (and the job's music choice) by sha256 for the render."""
+    provider, _, job = local_series_job(tmp_path, [])
+    library = SeriesLibrary(
+        provider.store.engine, LocalObjectStore(tmp_path / "objects")
+    )
+    provider.library = library
+    sid = job["series_id"]
+    logo = asyncio.run(library.add(sid, PNG, "image/png", "Logo", "logo", {}))
+    music = asyncio.run(library.add(sid, WAV, "audio/wav", "Bed", "music", {}))
+    settings = provider.settings
+    settings.mode = "local"
+    with TestClient(create_app(str(tmp_path / "jobs.db"), provider, settings)) as api:
+        bad = {**emptyish_bible(), "visual": {"logo_asset_id": music["id"]}}
+        assert api.put(f"/api/series/{sid}/bible", json=bad).status_code == 422
+        good = {
+            **emptyish_bible(),
+            "visual": {"logo_asset_id": logo["id"], "music_asset_id": music["id"]},
+        }
+        assert api.put(f"/api/series/{sid}/bible", json=good).status_code == 200
+        # Render options: captions and a music override, until rendering starts.
+        assert (
+            api.post(
+                "/api/jobs",
+                json={"title": "x", "series_id": sid, "sources": [SOURCE],
+                      "render": {"music_asset_id": logo["id"]}},
+            ).status_code
+            == 422
+        )
+        created = api.post(
+            "/api/jobs",
+            json={
+                "title": "x",
+                "series_id": sid,
+                "sources": [SOURCE],
+                "render": {"captions": False, "music_asset_id": music["id"]},
+            },
+        ).json()
+        assert created["render"] == {"captions": False, "music_asset_id": music["id"]}
+        patched = api.patch(
+            f"/api/jobs/{created['id']}/render", json={"captions": True}
+        )
+        assert patched.status_code == 200
+        assert patched.json()["render"] == {"captions": True, "music_asset_id": None}
+        assert api.patch(
+            f"/api/jobs/{created['id']}/render", json={"music_asset_id": "nope"}
+        ).status_code == 422
+
+    job["series_context"]["guidance"]["visual"].update(
+        logo_asset_id=logo["id"], music_asset_id=music["id"]
+    )
+    complete(job, "storyboard", {"scenes": [], "chapters": []})
+    assets = asyncio.run(provider.execute("assets", job))
+    assert assets["brand"] == {
+        "logo": {"asset_id": logo["id"], "sha256": logo["sha256"], "name": "Logo"}
+    }
+    assert assets["music"]["asset_id"] == music["id"]
+    job["render"] = {"captions": True, "music_asset_id": logo["id"]}
+    with pytest.raises(ReviewRequired, match="Music bed"):
+        asyncio.run(provider.execute("assets", job))
+    library.update(sid, logo["id"], status="archived")
+    job["render"] = {}
+    with pytest.raises(ReviewRequired, match="logo_asset_id"):
+        asyncio.run(provider.execute("assets", job))
+
+
+def emptyish_bible():
+    return {"voice": {}, "glossary": []}

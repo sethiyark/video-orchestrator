@@ -63,16 +63,19 @@ stage invocation without any extra bookkeeping: `write_sections`, `rewrite`,
 and the `critique` round loop are unchanged and unaware they are talking to
 a human. `budget()` does not apply to manual calls (no local context window
 to protect). Today only `script` and `critique` are documented/expected to
-use `"manual"`, but `validate_routes` accepts it for any of the seven
-`llama_cpp`-family stages.
+use `"manual"` for LLM work, but `validate_routes` accepts it for any of the
+seven `llama_cpp`-family stages. The `assets` stage has its own manual mode
+(the image relay, below) and the shipped profiles default to it.
 
 Stages implemented: research, verification, outline, script, critique,
-storyboard (closed component enum: `DefinitionCard`, `AnimatedFlowDiagram`,
-`BulletReveal`, `ImagePan`, `SeriesAsset`), assets (optional images; pins
-`SeriesAsset` references by sha256), narration,
-alignment, similarity (cosine vs prior completed similarity JSON), metadata.
-`render` consumes these artifacts through [Remotion/FFmpeg](rendering.md).
-`upload` raises `IntegrationUnavailable`.
+storyboard (chapters plus a closed component enum of fourteen scene types,
+`schemas.COMPONENTS`), assets (one image per chapter and scene, generated
+locally in batches, served from a cross-job cache, or relayed through the
+user's own Claude/Gemini chat; pins `SeriesAsset`, brand-kit and music
+references by sha256), narration, alignment, similarity (cosine vs prior
+completed similarity JSON), metadata. `render` consumes these artifacts
+through [Remotion/FFmpeg](rendering.md). `upload` raises
+`IntegrationUnavailable`.
 
 Critique: `governor.critique_rounds` rounds; each round is one batch of five
 critics (`CRITICS`, seeds `42+i`, `governor.critic_temperature`), aggregated
@@ -116,10 +119,20 @@ order, validates the whole as `Script`, and keeps `sections`
 runs on the script stage and every rewrite.
 
 Storyboard: the script is split into sentences (`SENTENCE_SPLIT`, the
-narration runtime's boundaries) and planned in chunks of
-`STORYBOARD_CHUNK_SENTENCES` (16), one `StoryboardChunk` request per chunk in
-one model load. The model receives `{"sentences": [{"n", "text"}]}` and
-returns scenes as `first_sentence`/`last_sentence` + `component` + `props`;
+narration runtime's boundaries). **Chapter pass** (`plan_chapters`): one
+`ChapterPlan` request over every numbered sentence (outline titles/purposes
+as hints, series guidance as data) returns 1–`MAX_CHAPTERS` (12) chapters as
+`first_sentence`/`last_sentence` + `title` + `tagline` + `hero_prompt`;
+`cover_sentences` snaps them to contiguous coverage. When the whole script
+does not fit the route's `budget()`, the script's own `sections` become the
+chapters instead (`chapters_from_sections`, logged at warning); a script with
+neither raises `ReviewRequired`. **Scene pass**: sentences are planned per
+chapter in chunks of `STORYBOARD_CHUNK_SENTENCES` (16) that never cross a
+chapter boundary, one `StoryboardChunk` request per chunk in one model load.
+Each request receives `{"sentences": [{"n", "text"}], "chapter": {number,
+count, title, tagline, is_last}, "available_components",
+"verified_claims": [{claim_id, quote}]}` and returns scenes as
+`first_sentence`/`last_sentence` + `component` + `props` + `image_prompt`;
 it never re-emits narration, so output size does not grow with the script.
 The chunk schema requires 1–6 sentences per scene (`MAX_SCENE_SENTENCES`).
 Gaps and overlaps between scenes are not schema errors: `cover_sentences`
@@ -127,10 +140,50 @@ sorts the scenes and snaps them onto the chunk (each scene starts right after
 the previous one ends, the first at the chunk's first sentence, the last ends
 at its last; a scene left with no sentences is dropped; every snap is logged
 at warning). Only a plan lying entirely outside its chunk raises
-`ReviewRequired`. The provider then copies the exact `narration_text`, numbers `scene_NNN` ids,
-sets `duration_seconds = max(words / 2.5, 2)`, and validates the assembled
-`Storyboard` (a violation such as >120 scenes or a >60 s scene is
-`ReviewRequired`).
+`ReviewRequired`. The provider then copies the exact `narration_text`, numbers
+`scene_NNN` ids, sets `duration_seconds = max(words / 2.5, 2)`, keeps
+`image_prompt` (an `ImagePan` scene's own `props.prompt` doubles as its
+`image_prompt`; prompts are blanked when images are disabled), assigns
+`chapter_NN` ids with `first_scene`/`last_scene` and `accent = index % 12`,
+and validates the assembled `Storyboard` (a violation such as >120 scenes, a
+>60 s scene, or chapters that do not cover every scene is `ReviewRequired`).
+
+`check_storyboard` then enforces the structural rules, each failure naming
+the scene and rewinding to storyboard: the last scene must be an `Outro`;
+`ChapterTitle` may only be a chapter's first scene; a `Callout` quote must be
+located (`locate_quote`) inside the verified claim its `claim_id` names;
+every scene needs an `image_prompt` while images are enabled; `ImagePan` is
+forbidden while they are disabled; `SeriesAsset` ids must be active series
+images/logos.
+
+Assets (`image_requests`, `generate_images`, `relay_images`): every chapter
+hero and every scene with an `image_prompt` needs an image, heroes first so a
+budget cap never leaves a chapter without a plate. Prompts get the series
+`image_style` appended verbatim (`styled_prompt`). The per-video cap is
+`min(models.governor.max_images, channel governor
+budgets.max_image_generations_per_video)`; more chapters than the cap is
+`ReviewRequired`; scenes past the cap are recorded as `{id, kind, fallback:
+"chapter_hero"}` and render on their chapter's hero plate. With a diffusion
+route, prompts are sent in batches of `IMAGE_BATCH` (24) per child (one
+pipeline load each, seeds `42 + index`, 1024×576) and every result is stored
+in the shared image cache keyed by `(styled prompt, model spec + cached
+revision, seed, size)`; a later job with the same key copies the cached file
+into its own artifact folder (`cache: hit`) without a model child. A
+per-prompt `error` from the child is a transient `RuntimeError` (worker
+retries). With `routes.assets: "manual"` (the default in every shipped
+profile) the stage raises `ManualStepRequired` listing every missing image
+(`extra.expected_images`, `extra.missing`) and a prompt document
+(`manual.compose_image_prompt`) the user works through in their own
+Claude/Gemini chat; uploads arrive through `POST
+/api/jobs/{id}/stages/assets/manual-images/{image_id}` ([api.md](api.md)),
+skips through `.../manual-images/skip` (scene images only — a hero can never
+be skipped), and the stage resumes once every expected id is uploaded or
+skipped, recording `{cache: "manual", provenance: {manual: true}}`. The
+stage also pins `SeriesAsset` scenes, the series bible's brand kit
+(`assets.brand = {logo|intro|outro: {asset_id, sha256, name}}`) and the
+music bed (`assets.music`; the job's `render.music_asset_id`, else the
+bible's `music_asset_id`) by sha256, failing closed on archived, missing or
+wrong-kind assets.
 
 Narration validates that the generated WAV is readable and nonempty before
 adopting it. Invalid audio requests regeneration.
@@ -181,8 +234,13 @@ incomplete stage.
 - Fabricated quotes fail closed.
 - Narration that does not match the script (low fidelity) fails closed.
 - Inputs that cannot fit the route's context fail closed without a model load.
-- Scene JSON cannot contain arbitrary renderer code.
-- Storyboard narration is copied from the script, never model-written.
+- Scene JSON cannot contain arbitrary renderer code; code, terminal lines,
+  icons and languages are displayed enums, never executed.
+- Storyboard narration is copied from the script, never model-written. A
+  `Callout` quote must appear inside a verified claim.
+- Chapters cover every scene exactly once; the video closes with an `Outro`.
+- Manually uploaded images are magic-byte checked and size-capped; the image
+  cache is keyed by prompt and model, never by a URL or path.
 - Model output length is bounded by the grammar where llama.cpp allows it;
   leaked reasoning is rejected before it becomes stage output.
 - Series guidance never reaches research/verification and cannot satisfy a
@@ -204,7 +262,8 @@ incomplete stage.
 [`test_series.py`](../backend/tests/test_series.py),
 [`test_manual.py`](../backend/tests/test_manual.py) (prompt/response
 round-trip), [`test_config.py`](../backend/tests/test_config.py) (`"manual"`
-route validation).
+route validation), [`test_assets.py`](../backend/tests/test_assets.py)
+(image batching, cache, budget ordering, relay park/upload/skip).
 
 ## Known limitations
 

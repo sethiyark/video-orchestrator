@@ -81,13 +81,23 @@ class PipelineFixtureRunner:
                 "required_changes": [],
                 "optional_changes": [],
             },
+            "ChapterPlan": {
+                "chapters": [
+                    {
+                        "first_sentence": 1,
+                        "last_sentence": 1,
+                        "title": "DNS",
+                        "hero_prompt": "A labeled resolver diagram",
+                    }
+                ]
+            },
             "StoryboardChunk": {
                 "scenes": [
                     {
                         "first_sentence": 1,
                         "last_sentence": 1,
-                        "component": "DefinitionCard",
-                        "props": {"title": "DNS", "body": "Domain name system"},
+                        "component": "Outro",
+                        "props": {"title": "DNS", "takeaways": ["Domain name system"]},
                     }
                 ]
             },
@@ -163,6 +173,9 @@ def test_restart_clears_stages_and_rebases_config_hash(tmp_path):
     path = str(tmp_path / "jobs.db")
     store = Store(path)
     provider = LocalProvider(settings, store, PipelineFixtureRunner())
+    provider.renderer.render = AsyncMock(
+        side_effect=RenderError("Remotion/FFmpeg unavailable in this offline fixture")
+    )
     with TestClient(create_app(path, provider, settings)) as client:
         job_id = client.post(
             "/api/jobs",
@@ -461,6 +474,9 @@ def test_manual_script_stage_parks_and_resumes_via_api(tmp_path):
     path = str(tmp_path / "jobs.db")
     store = Store(path)
     provider = LocalProvider(settings, store, PipelineFixtureRunner())
+    # The real renderer is covered by test_rendering's smoke test; keep this
+    # relay test deterministic.
+    provider.renderer.render = AsyncMock(return_value={"video": {"id": "v.mp4"}})
     with TestClient(create_app(path, provider, settings)) as client:
         response = client.post(
             "/api/jobs",

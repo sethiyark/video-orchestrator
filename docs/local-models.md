@@ -21,7 +21,7 @@ checkpoint resident.
 | `narration` | `hexgrad/Kokoro-82M` (`kokoro`); CUDA profile: `Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice` (`qwen_tts`, `speaker: Ryan`) | Kokoro / Qwen3-TTS | cpu / metal / cuda | <0.5 GB / ~2 GB |
 | `alignment` | `deepdml/faster-whisper-large-v3-turbo-ct2` int8 (`whisper`); CUDA profile: `MahmoudAshraf/mms-300m-1130-forced-aligner` (`ctc_aligner`) | faster-whisper / ctc-forced-aligner | cpu / cuda | ~1.6 GB / ~1.2 GB |
 | `embeddings` | `Qwen/Qwen3-Embedding-0.6B` | sentence-transformers | **CPU only** | ~1.2 GB |
-| `images` | CUDA: `city96/FLUX.1-schnell-gguf` Q4_K_S + GGUF T5 + FLUX base. Mac: `stabilityai/sdxl-turbo` | `diffusers_gguf` / `diffusers` | **cuda** (FLUX GGUF) or **metal** (SDXL-Turbo); off in default `models.yaml` | ~6.8 GB FLUX or ~5 GB Turbo |
+| `images` | CUDA: `city96/FLUX.1-schnell-gguf` Q4_K_S + GGUF T5 + FLUX base. Mac: `stabilityai/sdxl-turbo` | `diffusers_gguf` / `diffusers` | **cuda** (FLUX GGUF) or **metal** (SDXL-Turbo); off in default `models.yaml`. Only used when `routes.assets: images`; the shipped profiles route `assets` to `manual` (image relay) so no image model is needed | ~6.8 GB FLUX or ~5 GB Turbo |
 
 Peak memory is one GGUF plus its KV cache because `GPUManager` serialises all
 inference. The Mac profile uses the SDXL `diffusers` runtime on MPS; FLUX GGUF

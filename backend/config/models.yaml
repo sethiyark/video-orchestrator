@@ -70,7 +70,9 @@ routes:
   script: quality
   critique: quality
   storyboard: quality
-  assets: images
+  # "manual": relay image prompts through your own Claude/Gemini chat and
+  # upload the results (no GPU needed); "images" runs the local model.
+  assets: manual
   narration: narration
   alignment: alignment
   similarity: embeddings
@@ -84,5 +86,5 @@ governor:
   max_rewinds: 2
   min_research_confidence: 0.9
   max_similarity: 0.9
-  max_images: 3
+  max_images: 120
   min_narration_fidelity: 0.85

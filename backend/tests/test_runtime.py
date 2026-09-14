@@ -304,10 +304,17 @@ def test_sdxl_runs_on_metal(tmp_path, monkeypatch):
         def enable_vae_slicing(self):
             pass
 
+        loads = 0
+
+        def __init__(self):
+            Pipeline.loads += 1
+
         def __call__(self, prompt, **kwargs):
-            assert prompt == "diagram"
             assert kwargs["guidance_scale"] == 0.0
             assert kwargs["num_inference_steps"] == 4
+            assert (kwargs["width"], kwargs["height"]) == (1024, 576)
+            if prompt == "broken":
+                raise RuntimeError("NaN latents")
             return types.SimpleNamespace(images=[Image()])
 
     torch = types.ModuleType("torch")
@@ -330,12 +337,31 @@ def test_sdxl_runs_on_metal(tmp_path, monkeypatch):
         {"prompt": "diagram", "output_path": str(tmp_path / "out.png")},
     )
     assert out == {
-        "width": 768,
-        "height": 768,
+        "width": 1024,
+        "height": 576,
         "prompt": "diagram",
         "seed": 42,
     }
     assert saved == [str(tmp_path / "out.png")]
+
+    # A batch loads the pipeline once, keeps per-prompt seeds, and reports a
+    # failed prompt in place instead of losing the rest.
+    Pipeline.loads, saved[:] = 0, []
+    out = infer(
+        {"runtime": "diffusers", "device": "metal", "steps": 4},
+        str(tmp_path),
+        {
+            "prompts": [
+                {"prompt": "diagram", "output_path": str(tmp_path / "a.png"), "seed": 7},
+                {"prompt": "broken", "output_path": str(tmp_path / "b.png"), "seed": 8},
+                {"prompt": "diagram", "output_path": str(tmp_path / "c.png"), "seed": 9},
+            ]
+        },
+    )
+    assert Pipeline.loads == 1
+    assert [item.get("seed") for item in out["results"]] == [7, None, 9]
+    assert "NaN latents" in out["results"][1]["error"]
+    assert saved == [str(tmp_path / "a.png"), str(tmp_path / "c.png")]
 
 
 def test_runtime_main_writes_json_when_parent_pid_mismatches(tmp_path):

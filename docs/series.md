@@ -26,8 +26,12 @@ and it cannot change Governor thresholds or budgets.
 
 **Bible (`SeriesBible`, `extra="forbid"`, bounded lengths):**
 - `voice`: `audience`, `tone`, `style_rules[]`, `avoid_phrases[]`.
-- `visual`: `palette[]` (`#rrggbb`), `preferred_components[]` (storyboard
-  component names), `image_style`.
+- `visual`: `palette[]` (`#rrggbb`; three or more become the renderer's
+  chapter accents), `preferred_components[]` (storyboard component names,
+  the full closed enum), `image_style`, and the brand kit `logo_asset_id`,
+  `intro_asset_id`, `outro_asset_id` (active `logo`/`image` assets) and
+  `music_asset_id` (active `music`/`audio` asset). `PUT .../bible` rejects an
+  id that is not an active asset of the right kind in that series (422).
 - `glossary[]`: `{term, definition}`.
 
 `ThemeGuidance` has the same shape. `merge(base, overlay)` concatenates lists
@@ -61,7 +65,8 @@ Lookups that miss raise `SeriesNotFound` (HTTP 404). Conflicts raise
   returns `duplicate: true` for an existing file.
 - `assets(include_archived)`, `asset`, `update`, and `content` (returns bytes
   plus a content-hash filename).
-- `visual_assets` returns active `logo`/`image` assets.
+- `visual_assets` returns active `logo`/`image` assets. `BRAND_KINDS` maps
+  each bible brand-kit field to the asset kinds it may reference.
 - `delete_series_media` removes library rows only.
 - Sources: `sources`, `add_source` (validated as `Source`; duplicate id →
   conflict), `delete_source`, and `job_sources(ids)`, which copies excerpts
@@ -120,6 +125,13 @@ caption}`) may only reference active image/logo assets in the job's series:
   `series_assets: [{scene_id, asset_id, sha256, name}]`. An asset archived in
   between fails closed.
 
+**Brand kit and music.** The assets stage also pins the bible's
+`logo/intro/outro` assets as `assets.brand` and the music bed as
+`assets.music` (the job's `render.music_asset_id` wins over the bible's
+`music_asset_id`); the [renderer](rendering.md) re-hashes them before staging
+and shows the logo watermark, intro/outro plates and a ducked music bed.
+Standalone jobs have no brand kit and cannot set a music asset (422).
+
 ## Invariants
 
 - Series guidance and glossary text are never evidence. Claims still need
@@ -153,6 +165,7 @@ caption}`) may only reference active image/logo assets in the job's series:
 - `test_promote_media_artifact_into_series_library`
 - `test_series_asset_scene_is_validated_and_pinned`
 - `test_standalone_storyboard_forbids_series_assets`
+- `test_brand_kit_and_music_are_validated_and_pinned`
 
 The [renderer](rendering.md) verifies pinned `SeriesAsset` hashes before staging media.
 
@@ -165,4 +178,4 @@ The [renderer](rendering.md) verifies pinned `SeriesAsset` hashes before staging
 - Uploads are a raw request body (not multipart) and are buffered in memory up
   to the size cap.
 - `MockProvider` ignores series guidance, and its storyboard never uses
-  `SeriesAsset`.
+  `SeriesAsset` (it does carry chapters and image prompts).

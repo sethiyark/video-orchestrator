@@ -1,11 +1,12 @@
 import asyncio
 import importlib.util
 import logging
+import tempfile
 from contextlib import asynccontextmanager, nullcontext, suppress
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import (
@@ -37,7 +38,7 @@ from .providers import MockProvider, Provider
 from .schemas import Source
 from .series import SeriesNotFound, SeriesStore
 from .series.api import idea_brief, series_router
-from .series.library import AssetKind, SeriesLibrary, UnsupportedMedia
+from .series.library import AssetKind, SeriesLibrary, UnsupportedMedia, matches_media
 from .storage import build_object_store
 from .store import Store, now
 
@@ -92,11 +93,21 @@ class SourcesInput(BaseModel):
         return sources
 
 
+class RenderOptions(BaseModel):
+    """Per-video presentation choices the render stage reads."""
+
+    model_config = ConfigDict(extra="forbid")
+    captions: bool = True
+    # An active music asset in the job's series; None keeps the bible default.
+    music_asset_id: str | None = Field(default=None, min_length=1, max_length=36)
+
+
 class JobInput(SourcesInput):
     title: str = Field(min_length=1, max_length=160)
     brief: str = Field(default="", max_length=5000)
     series_id: str | None = None
     theme_id: str | None = None
+    render: RenderOptions = Field(default_factory=RenderOptions)
 
     @field_validator("title")
     @classmethod
@@ -124,7 +135,21 @@ class PromoteInput(BaseModel):
 
 
 # Job artifact suffix → media type that may be promoted into a series library.
-PROMOTABLE = {".png": "image/png", ".wav": "audio/wav"}
+PROMOTABLE = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".webp": "image/webp",
+    ".wav": "audio/wav",
+}
+# Images a user made in their own Claude/Gemini chat for a parked assets stage.
+MANUAL_IMAGE_TYPES = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp"}
+MANUAL_IMAGE_MAX_BYTES = 8 * 1024 * 1024
+
+
+class SkipImagesInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    # Scene ids to fall back to their chapter hero; empty means every missing scene.
+    ids: list[str] = Field(default_factory=list, max_length=120)
 
 
 def media_output(job, artifact_id):
@@ -296,13 +321,14 @@ def create_app(
                 except ManualStepRequired as exc:
                     store.finish_attempt(attempt_id, "interrupted", error=None)
                     stage["status"] = "awaiting_input"
+                    previous = (stage.get("output") or {}).get("manual") or {}
                     stage["output"] = {
                         "manual": {
-                            "responses": (
-                                (stage.get("output") or {}).get("manual") or {}
-                            ).get("responses", {}),
+                            **previous,
+                            "responses": previous.get("responses", {}),
                             "prompt": exc.prompt,
                             "schema_names": exc.schema_names,
+                            **exc.extra,
                         }
                     }
                     job["status"] = "awaiting_manual_input"
@@ -639,11 +665,43 @@ def create_app(
     async def list_jobs():
         return with_series_state(store.list())
 
+    def check_music(job, options: RenderOptions):
+        if options.music_asset_id and not job.get("series_id"):
+            raise HTTPException(422, "music_asset_id requires a video in a series")
+        if options.music_asset_id:
+            try:
+                asset = library.asset(job["series_id"], options.music_asset_id)
+            except SeriesNotFound:
+                asset = None
+            if not asset or asset["status"] != "active" or asset["kind"] not in (
+                "music",
+                "audio",
+            ):
+                raise HTTPException(
+                    422, "music_asset_id must be an active music asset in this series"
+                )
+
     @app.post("/api/jobs", status_code=201)
     async def create_job(body: JobInput):
         context = series_snapshot(body.series_id, body.theme_id)
         job = create_job_record(body.title, body.brief, body, context)
+        check_music(job, body.render)
+        job["render"] = body.render.model_dump()
+        store.save(job)
         return with_series_state([job])[0]
+
+    @app.patch("/api/jobs/{job_id}/render")
+    async def update_render_options(job_id: str, body: RenderOptions):
+        """Captions and music can change until the render stage has run."""
+        job = get_job(job_id)
+        render_stage = next(s for s in job["stages"] if s["name"] == "render")
+        if job["status"] in ("queued", "running") or render_stage["status"] == "completed":
+            raise HTTPException(409, "Render options are locked once rendering starts")
+        check_music(job, body)
+        stored = store.get(job_id)
+        stored["render"] = body.model_dump()
+        store.save(stored)
+        return with_series_state([store.get(job_id)])[0]
 
     @app.get("/api/jobs/{job_id}")
     async def detail(job_id: str):
@@ -774,6 +832,77 @@ def create_app(
         result = store.submit_manual_response(job_id, stage_name, body.response)
         if result is None:
             raise HTTPException(409, "This stage is not waiting for manual input")
+        return result
+
+    def parked_for_images(job_id):
+        job = get_job(job_id)
+        stage = next((s for s in job["stages"] if s["name"] == "assets"), None)
+        manual = ((stage or {}).get("output") or {}).get("manual") or {}
+        if (
+            stage is None
+            or stage["status"] != "awaiting_input"
+            or job["status"] != "awaiting_manual_input"
+            or not manual.get("expected_images")
+        ):
+            raise HTTPException(409, "The assets stage is not waiting for images")
+        return job, manual
+
+    @app.post("/api/jobs/{job_id}/stages/assets/manual-images/skip")
+    async def skip_manual_images(job_id: str, body: SkipImagesInput):
+        """Fall back to the chapter hero for scene images; heroes cannot be skipped."""
+        _, manual = parked_for_images(job_id)
+        kinds = {item["id"]: item["kind"] for item in manual["expected_images"]}
+        ids = body.ids or [
+            image_id for image_id in manual.get("missing", []) if kinds[image_id] == "scene"
+        ]
+        unknown = [i for i in ids if i not in kinds]
+        if unknown:
+            raise HTTPException(422, f"Unknown image ids: {', '.join(unknown)}")
+        heroes = [i for i in ids if kinds[i] == "hero"]
+        if heroes:
+            raise HTTPException(
+                422, f"Chapter heroes cannot be skipped: {', '.join(heroes)}"
+            )
+        result = store.record_manual_images(job_id, "assets", skipped=ids)
+        if result is None:
+            raise HTTPException(409, "The assets stage is not waiting for images")
+        return result
+
+    @app.post("/api/jobs/{job_id}/stages/assets/manual-images/{image_id}")
+    async def upload_manual_image(job_id: str, image_id: str, request: Request):
+        """Raw request body is the image; Content-Type declares its media type.
+        The id names one of the stage's expected_images."""
+        _, manual = parked_for_images(job_id)
+        if image_id not in {item["id"] for item in manual["expected_images"]}:
+            raise HTTPException(422, "Unknown image id for this video")
+        content_type = request.headers.get("content-type", "").split(";")[0].strip()
+        suffix = MANUAL_IMAGE_TYPES.get(content_type)
+        if suffix is None:
+            raise HTTPException(415, "Upload a PNG, JPEG, or WebP image")
+        too_large = HTTPException(
+            413, f"Images are limited to {MANUAL_IMAGE_MAX_BYTES} bytes"
+        )
+        declared = request.headers.get("content-length", "")
+        if declared.isdigit() and int(declared) > MANUAL_IMAGE_MAX_BYTES:
+            raise too_large
+        data = bytearray()
+        async for chunk in request.stream():
+            data.extend(chunk)
+            if len(data) > MANUAL_IMAGE_MAX_BYTES:
+                raise too_large
+        if not data or not matches_media(content_type, bytes(data)):
+            raise HTTPException(415, "File content does not match its image type")
+        with tempfile.TemporaryDirectory(dir=artifacts.folder(job_id)) as temporary:
+            path = Path(temporary) / f"{image_id}{suffix}"
+            path.write_bytes(bytes(data))
+            record = {
+                "artifact": artifacts.adopt(job_id, path),
+                "content_type": content_type,
+                "uploaded_at": now(),
+            }
+        result = store.record_manual_images(job_id, "assets", images={image_id: record})
+        if result is None:
+            raise HTTPException(409, "The assets stage is not waiting for images")
         return result
 
     @app.delete("/api/jobs/{job_id}", status_code=204)

@@ -4,11 +4,11 @@ from typing import Annotated, Literal
 
 from pydantic import Field, StringConstraints
 
-from ..schemas import StrictModel
+from ..schemas import COMPONENTS, StrictModel
 
-Component = Literal[
-    "DefinitionCard", "AnimatedFlowDiagram", "BulletReveal", "ImagePan", "SeriesAsset"
-]
+# Storyboard component names a bible may prefer; the same closed enum the
+# storyboard schema accepts.
+Component = Literal[COMPONENTS]
 Hex = Annotated[str, StringConstraints(pattern=r"^#[0-9a-fA-F]{6}$")]
 Rule = Annotated[str, StringConstraints(min_length=1, max_length=300)]
 
@@ -20,10 +20,19 @@ class VoiceGuide(StrictModel):
     avoid_phrases: list[Rule] = Field(default_factory=list, max_length=40)
 
 
+AssetId = Annotated[str, StringConstraints(min_length=1, max_length=36)]
+
+
 class VisualGuide(StrictModel):
     palette: list[Hex] = Field(default_factory=list, max_length=12)
     preferred_components: list[Component] = Field(default_factory=list, max_length=4)
     image_style: str = Field(default="", max_length=300)
+    # Brand kit: ids of active series library assets the renderer reuses in
+    # every video of the series (validated against the library on save).
+    logo_asset_id: AssetId | None = None
+    intro_asset_id: AssetId | None = None
+    outro_asset_id: AssetId | None = None
+    music_asset_id: AssetId | None = None
 
 
 class GlossaryEntry(StrictModel):
