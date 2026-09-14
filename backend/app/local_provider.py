@@ -236,6 +236,10 @@ class LocalProvider:
         self.runner = runner or LocalRunner(settings)
         self.artifacts = Artifacts(settings.artifact_dir)
         self.library = SeriesLibrary(store.engine)
+        # Set by execute(); offsets default LLM seeds so a worker-level retry of a
+        # deterministic failure (fixed seed + prompt reproduce the same bad output)
+        # actually samples something different instead of repeating it verbatim.
+        self._attempt = 0
 
     @property
     def config(self):
@@ -313,6 +317,10 @@ class LocalProvider:
                         {"role": "user", "content": json.dumps(data)},
                     ],
                     "schema_name": schema.__name__,
+                    # A worker-level retry (self._attempt > 0) shifts the default
+                    # seed so it doesn't just replay the previous attempt's output;
+                    # a caller-supplied seed in options still wins.
+                    "seed": 42 + self._attempt,
                     **(options[0] if options else {}),
                 }
             )
@@ -644,7 +652,8 @@ class LocalProvider:
             raise ReviewRequired(f"Storyboard is out of bounds: {exc}") from exc
         return {**storyboard, "provenance": results[0]["provenance"]}
 
-    async def execute(self, stage, job):
+    async def execute(self, stage, job, attempt: int = 0):
+        self._attempt = attempt
         result = await self._execute(stage, job)
         result["provider"] = "local"
         result["artifact"] = self.artifacts.put_json(job["id"], result)
@@ -792,7 +801,7 @@ class LocalProvider:
                             ),
                             Critic,
                             {
-                                "seed": 42 + index,
+                                "seed": 42 + self._attempt * len(CRITICS) + index,
                                 "temperature": governor.critic_temperature,
                             },
                         )

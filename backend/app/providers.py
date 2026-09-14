@@ -21,14 +21,14 @@ STAGES = [
 
 
 class Provider(Protocol):
-    async def execute(self, stage: str, job: dict) -> dict: ...
+    async def execute(self, stage: str, job: dict, attempt: int = 0) -> dict: ...
 
 
 class MockProvider:
     def __init__(self, delay: float = 0.8):
         self.delay = delay
 
-    async def execute(self, stage: str, job: dict) -> dict:
+    async def execute(self, stage: str, job: dict, attempt: int = 0) -> dict:
         await asyncio.sleep(self.delay)
         title = job["title"]
         outputs = {

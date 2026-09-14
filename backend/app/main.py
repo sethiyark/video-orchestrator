@@ -268,7 +268,9 @@ def create_app(
                 store.save(job)
                 attempt_id = store.start_attempt(job["id"], stage["name"])
                 try:
-                    stage["output"] = await provider.execute(stage["name"], job)
+                    stage["output"] = await provider.execute(
+                        stage["name"], job, attempt=index
+                    )
                     store.finish_attempt(
                         attempt_id,
                         "completed",

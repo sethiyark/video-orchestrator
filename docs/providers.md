@@ -4,8 +4,8 @@ Source: [`backend/app/providers.py`](../backend/app/providers.py).
 
 ## Responsibility
 
-Stable `Provider.execute(stage, job) -> dict` so the worker does not care
-whether the backend is mock or local.
+Stable `Provider.execute(stage, job, attempt=0) -> dict` so the worker does not
+care whether the backend is mock or local.
 
 ## Public surface
 
@@ -21,7 +21,17 @@ nothing was sent to YouTube.
 ## Invariants
 
 Worker retries: local uses `models.governor.max_attempts`; mock is 1 attempt
-(manual retry). Mock failures stay manual.
+(manual retry). Mock failures stay manual. `run_stages` (`backend/app/main.py`)
+passes the 0-based retry index as `attempt` on every call, including the
+first. `LocalProvider` uses it to offset the default LLM seed
+(`42 + attempt`, and `42 + attempt * len(CRITICS) + index` for the five
+parallel critics) so a worker-level retry does not just replay the previous
+attempt's request byte-for-byte: local inference is deterministic given a
+fixed seed and prompt, so an unvaried retry of a validation failure (e.g. a
+storyboard scene violating `MAX_SCENE_SENTENCES`) reproduces the identical bad
+output every time instead of giving the model an actual second chance. A
+request-level `seed` passed through `llm_batch`'s `options` still overrides
+the default.
 
 Rewinds (local only): when a stage's final attempt raises `ReviewRequired`
 with `rewind_to` set to an earlier stage, `create_app`'s `rewind` resets
