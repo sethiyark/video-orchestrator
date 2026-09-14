@@ -139,6 +139,7 @@ class Store:
         config_hash=None,
         series_context=None,
         idea_id=None,
+        stage_hashes=None,
     ):
         return self.save(
             {
@@ -154,6 +155,7 @@ class Store:
                 "sources": sources or [],
                 "mode": mode,
                 "config_hash": config_hash,
+                "stage_hashes": stage_hashes,
                 "stages": [
                     {"name": name, "status": "pending", "output": None}
                     for name in STAGES
@@ -175,7 +177,7 @@ class Store:
                 return None
         return self.get(job_id)
 
-    def restart(self, job_id, config_hash=None, series_context=None):
+    def restart(self, job_id, config_hash=None, series_context=None, stage_hashes=None):
         """Wipe stage outputs, rebind config_hash (and series snapshot), and queue."""
         with Session(self.engine) as session, session.begin():
             row = session.get(VideoJob, job_id)
@@ -188,6 +190,10 @@ class Store:
             row.context = {
                 **(row.context or {}),
                 "config_hash": config_hash,
+                "stage_hashes": stage_hashes,
+                "config_changes": [],
+                "rewinds": {},
+                "corrections": {},
                 **(series_fields(series_context) if series_context else {}),
             }
             stages = session.scalars(

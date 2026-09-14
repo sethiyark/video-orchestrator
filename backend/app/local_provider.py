@@ -63,9 +63,14 @@ SERIES_RULE = (
 
 
 class ReviewRequired(ValueError):
-    def __init__(self, message, details=None):
+    """A stage cannot pass without a change. ``rewind_to`` names an earlier
+    stage the worker may re-run with ``details`` as corrections (Governor
+    ``max_rewinds``); without it the job stops for human review."""
+
+    def __init__(self, message, details=None, rewind_to=None):
         super().__init__(message)
         self.details = details or {}
+        self.rewind_to = rewind_to
 
 
 class IntegrationUnavailable(ValueError):
@@ -236,8 +241,7 @@ class LocalProvider:
         """Read live so dashboard overrides change config_hash immediately."""
         return self.settings.models
 
-    @property
-    def config_hash(self):
+    def _revisions(self):
         revisions = {}
         hub = ModelHub(self.settings.cache_dir)
         for role, spec in self.config.models.items():
@@ -247,8 +251,34 @@ class LocalProvider:
                 revisions[role] = hub.resolve(spec)["revision"]
             except ModelNotReady:
                 revisions[role] = None
-        data = {"config": self.config.model_dump(), "revisions": revisions}
+        return revisions
+
+    @property
+    def config_hash(self):
+        data = {"config": self.config.model_dump(), "revisions": self._revisions()}
         return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
+
+    @property
+    def stage_hashes(self):
+        """Per-stage fingerprint of the model a stage would run on: its route,
+        that role's spec, the cached revision, and for assets whether images
+        are enabled. The worker uses these to report which pending stages a
+        config change actually touches; it never blocks on them."""
+        revisions = self._revisions()
+        hashes = {}
+        for stage, role in self.config.routes.items():
+            spec = self.config.models.get(role)
+            data = {
+                "role": role,
+                "spec": spec.model_dump() if spec else None,
+                "revision": revisions.get(role),
+            }
+            if stage == "assets":
+                data["images_enabled"] = self.config.images_enabled
+            hashes[stage] = hashlib.sha256(
+                json.dumps(data, sort_keys=True).encode()
+            ).hexdigest()
+        return hashes
 
     SYSTEM_PROMPT = (
         "You produce English engineering explainers. Return only JSON conforming to "
@@ -457,6 +487,18 @@ class LocalProvider:
         result = await self.write_sections(job, sections, verified, rewrite_request)
         self.check_script_length(job, result)
         return result
+
+    def previous_draft(self, job, corrections):
+        """Sections of the draft a critique rewind is correcting, read from the
+        review artifact it named; empty when there is none."""
+        artifact = corrections.get("review_artifact") or {}
+        try:
+            path = self.artifacts.resolve(job["id"], artifact["id"])
+        except (KeyError, ValueError, FileNotFoundError):
+            return []
+        with open(path) as handle:
+            draft = json.load(handle).get("last_draft") or {}
+        return script_parts(draft) if draft.get("text") else []
 
     async def research(self, job, brief, sources):
         """Extract claims one source per request in one model load. Quotes are
@@ -672,16 +714,38 @@ class LocalProvider:
                 for section in sections
             ]
 
+            corrections = (job.get("corrections") or {}).get(stage) or {}
+            previous = self.previous_draft(job, corrections)
+
             def script_request(index, section):
-                return with_series(
-                    job,
-                    stage,
+                instructions = (
                     "Write natural spoken narration for ONE outline section using ONLY "
                     "the supplied verified claims. Aim for about target_words words. "
                     "Do not repeat or summarise other sections; no greetings, "
                     "fabricated facts, or sign-offs unless this is the first or last "
-                    "section. Return the section text and the claim ids used.",
+                    "section. Return the section text and the claim ids used."
+                )
+                feedback = {}
+                if corrections:
+                    instructions += (
+                        " A previous draft of this section failed independent critics; "
+                        "write a fresh version that resolves every required_change "
+                        "that applies to it instead of lightly editing previous_attempt."
+                    )
+                    feedback = {
+                        "required_changes": corrections.get("required_changes", {}),
+                        "previous_attempt": (
+                            previous[index]["text"]
+                            if len(previous) == len(sections)
+                            else None
+                        ),
+                    }
+                return with_series(
+                    job,
+                    stage,
+                    instructions,
                     {
+                        **feedback,
                         **brief,
                         "section_number": index + 1,
                         "section_count": len(sections),
@@ -714,7 +778,7 @@ class LocalProvider:
                             *with_series(
                                 job,
                                 stage,
-                                f"You are the independent {name} critic. Score 0–10 and list actionable issues. Judge only the supplied draft/evidence. Originality checks phrasing here; corpus similarity is checked separately."
+                                f"You are the independent {name} critic of spoken voiceover narration; there are no headings, visuals, or on-screen text to add. Score 0–10 and list actionable issues. Put a change in required_changes only when it must block approval and a narration rewrite can satisfy it; return an empty list when the draft is acceptable. Judge only the supplied draft/evidence. Originality checks phrasing here; corpus similarity is checked separately."
                                 + (
                                     " Enforce the series voice guide and glossary wording."
                                     if name == "style" and series_guidance(job, stage)
@@ -749,9 +813,20 @@ class LocalProvider:
             artifact = self.artifacts.put_json(
                 job["id"], {"rounds": rounds, "last_draft": draft}
             )
+            # The worker may send the job back to the script stage with these
+            # corrections (Governor max_rewinds) before a human has to look.
             raise ReviewRequired(
                 "Script did not pass independent critics within the configured revision budget",
-                {"review_artifact": artifact},
+                {
+                    "review_artifact": artifact,
+                    "required_changes": {
+                        name: critic["required_changes"]
+                        for name, critic in critics.items()
+                        if critic["required_changes"]
+                    },
+                    "score": score,
+                },
+                rewind_to="script",
             )
         if stage == "storyboard":
             assets = self.series_assets(job)

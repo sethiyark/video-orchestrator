@@ -33,14 +33,10 @@ from .series import SeriesNotFound, SeriesStore
 from .series.api import idea_brief, series_router
 from .series.library import AssetKind, SeriesLibrary, UnsupportedMedia
 from .storage import build_object_store
-from .store import Store
+from .store import Store, now
 
 logger = logging.getLogger(__name__)
 
-CONFIG_CHANGED = (
-    "Model configuration changed since this job was created. "
-    "Restart the pipeline to run from scratch with the current models."
-)
 
 SERIES_CHANGED = (
     "The series bible or theme changed since this job was created. "
@@ -178,68 +174,151 @@ def create_app(
     setup = SetupManager(hub)
     artifacts = Artifacts(settings.artifact_dir)
 
+    def rebase_config(job):
+        """Local jobs follow the live model configuration instead of blocking on
+        it. When the fingerprint moved, record which pending stages will now
+        run on a changed model, stamp the current hashes, and continue; a model
+        that cannot actually load still fails its stage with ModelNotReady."""
+        if settings.mode != "local":
+            return
+        current = getattr(provider, "config_hash", None)
+        if job.get("config_hash") == current:
+            return
+        live = getattr(provider, "stage_hashes", None) or {}
+        stored = job.get("stage_hashes")
+        pending = [s["name"] for s in job["stages"] if s["status"] != "completed"]
+        affected = (
+            pending
+            if stored is None
+            else [name for name in pending if live.get(name) != stored.get(name)]
+        )
+        job.setdefault("config_changes", []).append(
+            {
+                "at": now(),
+                "previous": job.get("config_hash"),
+                "current": current,
+                "pending_stages_affected": affected,
+            }
+        )
+        job["config_hash"], job["stage_hashes"] = current, live
+        logger.info(
+            "job %s: model configuration changed; continuing (pending stages on a "
+            "changed model: %s)",
+            job["id"],
+            ", ".join(affected) or "none",
+        )
+        store.save(job)
+
+    def rewind(job, stage, exc):
+        """Send a failed stage back to the earlier stage its error names, with
+        the error's details as corrections, while the Governor budget allows.
+        Returns True when the job was rewound and the stage loop should
+        restart from the first incomplete stage."""
+        target = getattr(exc, "rewind_to", None)
+        names = [entry["name"] for entry in job["stages"]]
+        if (
+            settings.mode != "local"
+            or target not in names
+            or names.index(target) >= names.index(stage["name"])
+        ):
+            return False
+        rewinds = job.setdefault("rewinds", {})
+        count = rewinds.get(stage["name"], 0)
+        if count >= settings.models.governor.max_rewinds:
+            return False
+        rewinds[stage["name"]] = count + 1
+        for entry in job["stages"][
+            names.index(target) : names.index(stage["name"]) + 1
+        ]:
+            entry["status"], entry["output"] = "pending", None
+        job.setdefault("corrections", {})[target] = {
+            "from_stage": stage["name"],
+            "attempt": count + 1,
+            "message": str(exc),
+            **exc.details,
+        }
+        logger.info(
+            "job %s: %s failed, rewinding to %s with corrections (%d/%d)",
+            job["id"],
+            stage["name"],
+            target,
+            count + 1,
+            settings.models.governor.max_rewinds,
+        )
+        return True
+
+    async def run_stages(job):
+        """Run every incomplete stage in order. Returns "rewound" when a stage
+        sent the job back and the loop should start again, "waiting" at the
+        approval gate, and "done" when every stage completed."""
+        for stage in job["stages"]:
+            rebase_config(job)
+            if stage["status"] == "completed":
+                continue
+            if stage["name"] == "upload" and not job["approved_at"]:
+                job["status"] = "awaiting_approval"
+                store.save(job)
+                return "waiting"
+            # Mock failures remain manual; real transient model failures have bounded retries.
+            attempts = (
+                settings.models.governor.max_attempts if settings.mode == "local" else 1
+            )
+            for index in range(attempts):
+                stage["status"] = "running"
+                store.save(job)
+                attempt_id = store.start_attempt(job["id"], stage["name"])
+                try:
+                    stage["output"] = await provider.execute(stage["name"], job)
+                    store.finish_attempt(
+                        attempt_id,
+                        "completed",
+                        provenance=stage["output"].get("provenance", {}),
+                    )
+                    stage["status"] = "completed"
+                    store.save(job)
+                    break
+                except asyncio.CancelledError:
+                    store.finish_attempt(
+                        attempt_id, "interrupted", error="Worker stopped"
+                    )
+                    raise
+                except Exception as exc:
+                    store.finish_attempt(
+                        attempt_id,
+                        "failed",
+                        error=str(exc),
+                        provenance=getattr(exc, "details", {}),
+                    )
+                    if (
+                        isinstance(
+                            exc,
+                            (ReviewRequired, IntegrationUnavailable, ModelNotReady),
+                        )
+                        or index + 1 == attempts
+                    ):
+                        if rewind(job, stage, exc):
+                            store.save(job)
+                            return "rewound"
+                        raise
+                    await asyncio.sleep(min(2**index, 8))
+            # Corrections are consumed once the stage that asked for them passes.
+            for target, correction in list(job.get("corrections", {}).items()):
+                if correction.get("from_stage") == stage["name"]:
+                    del job["corrections"][target]
+                    store.save(job)
+        return "done"
+
     async def process(job):
         try:
             if job.get("mode", "mock") != settings.mode:
                 raise ReviewRequired(
                     "This job was created in a different provider mode. Restore its mode or create a new draft."
                 )
-            if settings.mode == "local" and job.get("config_hash") != getattr(
-                provider, "config_hash", None
-            ):
-                raise ReviewRequired(CONFIG_CHANGED)
-            for stage in job["stages"]:
-                if settings.mode == "local" and job.get("config_hash") != getattr(
-                    provider, "config_hash", None
-                ):
-                    raise ReviewRequired(CONFIG_CHANGED)
-                if stage["status"] == "completed":
-                    continue
-                if stage["name"] == "upload" and not job["approved_at"]:
-                    job["status"] = "awaiting_approval"
-                    store.save(job)
-                    return
-                # Mock failures remain manual; real transient model failures have bounded retries.
-                attempts = (
-                    settings.models.governor.max_attempts
-                    if settings.mode == "local"
-                    else 1
-                )
-                for index in range(attempts):
-                    stage["status"] = "running"
-                    store.save(job)
-                    attempt_id = store.start_attempt(job["id"], stage["name"])
-                    try:
-                        stage["output"] = await provider.execute(stage["name"], job)
-                        store.finish_attempt(
-                            attempt_id,
-                            "completed",
-                            provenance=stage["output"].get("provenance", {}),
-                        )
-                        stage["status"] = "completed"
-                        store.save(job)
-                        break
-                    except asyncio.CancelledError:
-                        store.finish_attempt(
-                            attempt_id, "interrupted", error="Worker stopped"
-                        )
-                        raise
-                    except Exception as exc:
-                        store.finish_attempt(
-                            attempt_id,
-                            "failed",
-                            error=str(exc),
-                            provenance=getattr(exc, "details", {}),
-                        )
-                        if (
-                            isinstance(
-                                exc,
-                                (ReviewRequired, IntegrationUnavailable, ModelNotReady),
-                            )
-                            or index + 1 == attempts
-                        ):
-                            raise
-                        await asyncio.sleep(min(2**index, 8))
+            rebase_config(job)
+            while await run_stages(job) == "rewound":
+                pass
+            if job["status"] == "awaiting_approval":
+                return
             job["status"] = "completed"
             store.save(job)
         except (Exception, asyncio.CancelledError) as exc:
@@ -345,6 +424,7 @@ def create_app(
             getattr(provider, "config_hash", None),
             series_context,
             idea_id,
+            getattr(provider, "stage_hashes", None),
         )
 
     def start_idea_job(idea, body: SourcesInput):
@@ -606,19 +686,14 @@ def create_app(
                 409, "Job belongs to a different provider mode; create a new draft"
             )
 
-    def config_stale(job):
-        return settings.mode == "local" and job.get("config_hash") != getattr(
-            provider, "config_hash", None
-        )
-
     @app.post("/api/jobs/{job_id}/run")
     async def run(job_id: str):
         job = get_job(job_id)
         require_same_mode(job)
-        if config_stale(job):
-            raise HTTPException(409, CONFIG_CHANGED)
         if job["series_stale"]:
             raise HTTPException(409, SERIES_CHANGED)
+        # A changed model config is recorded, not a reason to refuse the run.
+        rebase_config(store.get(job_id))
         result = store.transition(job_id, ["draft", "failed"], "queued")
         if result is None:
             raise HTTPException(409, "Only draft or failed jobs can be started")
@@ -634,7 +709,12 @@ def create_app(
                 context = series.resolve_context(job["series_id"], job.get("theme_id"))
             except SeriesNotFound as exc:
                 raise HTTPException(409, exc.args[0]) from exc
-        result = store.restart(job_id, getattr(provider, "config_hash", None), context)
+        result = store.restart(
+            job_id,
+            getattr(provider, "config_hash", None),
+            context,
+            getattr(provider, "stage_hashes", None),
+        )
         if result is None:
             raise HTTPException(
                 409,
