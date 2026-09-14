@@ -103,7 +103,7 @@ def test_source_grounding_and_model_routing(tmp_path):
 
 
 def test_fabricated_quote_fails_closed(tmp_path):
-    provider, _, job = setup(
+    provider, runner, job = setup(
         tmp_path,
         [
             {
@@ -117,10 +117,116 @@ def test_fabricated_quote_fails_closed(tmp_path):
                     }
                 ],
             }
+        ]
+        * 2,
+    )
+    with pytest.raises(ReviewRequired, match="unsupported") as info:
+        asyncio.run(provider.execute("research", job))
+    # One re-ask naming the bad quote, then fail closed with details.
+    assert [len(payload["requests"]) for _, payload in runner.calls] == [1, 1]
+    retry = json.loads(runner.calls[1][1]["requests"][0]["messages"][1]["content"])
+    assert retry["unsupported_quotes"] == ["This quotation was fabricated."]
+    assert info.value.details["unsupported"] == {
+        "s1": ["This quotation was fabricated."]
+    }
+
+
+def test_research_quotes_tolerate_flattened_punctuation():
+    from app.local_provider import locate_quote
+
+    excerpt = "The study \u201cGrind size\u201d found\u00a0that finer\u2014not coarser\u2014grinds extract more."
+    assert (
+        locate_quote(
+            'the study "grind size" found that finer - not coarser - grinds', excerpt
+        )
+        == "The study \u201cGrind size\u201d found\u00a0that finer\u2014not coarser\u2014grinds"
+    )
+    assert locate_quote("finer grinds extract less", excerpt) is None
+    assert locate_quote("   ", excerpt) is None
+
+
+def test_research_runs_one_request_per_source_and_owns_ids(tmp_path):
+    provider, runner, job = setup(
+        tmp_path,
+        [
+            {
+                "summary": "First",
+                "claims": [
+                    {
+                        "id": "c1",
+                        "text": "Maps names",
+                        "source_id": "wrong",
+                        "quote": "dns maps domain names",
+                    }
+                ],
+            },
+            {
+                "summary": "Second",
+                "claims": [
+                    {
+                        "id": "c1",
+                        "text": "Caches",
+                        "source_id": "s2",
+                        "quote": "Resolvers cache answers",
+                    },
+                    {
+                        "id": "c2",
+                        "text": "Short TTL",
+                        "source_id": "s2",
+                        "quote": "for the TTL",
+                    },
+                ],
+            },
         ],
     )
-    with pytest.raises(ReviewRequired, match="unsupported"):
-        asyncio.run(provider.execute("research", job))
+    job["sources"].append(
+        {
+            "id": "s2",
+            "url": "https://example.com/ttl",
+            "title": "TTL",
+            "excerpt": "Resolvers cache answers for the TTL.",
+        }
+    )
+    result = asyncio.run(provider.execute("research", job))
+    assert len(runner.calls) == 1
+    requests = runner.calls[0][1]["requests"]
+    assert [
+        json.loads(r["messages"][1]["content"])["source"]["id"] for r in requests
+    ] == [
+        "s1",
+        "s2",
+    ]
+    assert all(
+        "sources" not in json.loads(r["messages"][1]["content"]) for r in requests
+    )
+    assert [(c["id"], c["source_id"]) for c in result["claims"]] == [
+        ("c1", "s1"),
+        ("c2", "s2"),
+        ("c3", "s2"),
+    ]
+    # Quotes are stored exactly as the excerpt spells them.
+    assert result["claims"][0]["quote"] == "DNS maps domain names"
+    assert result["summary"] == "First\n\nSecond"
+    assert result["verified"] is False
+
+
+def test_research_retry_recovers_a_source(tmp_path):
+    good = {
+        "id": "c1",
+        "text": "Maps",
+        "source_id": "s1",
+        "quote": "DNS maps domain names to IP addresses.",
+    }
+    provider, runner, job = setup(
+        tmp_path,
+        [
+            {"summary": "x", "claims": [{**good, "quote": "Made up quote here."}]},
+            {"summary": "x", "claims": [good]},
+        ],
+    )
+    result = asyncio.run(provider.execute("research", job))
+    assert [len(payload["requests"]) for _, payload in runner.calls] == [1, 1]
+    assert result["claims"][0]["quote"] == good["quote"]
 
 
 def test_script_cannot_reference_unverified_claims(tmp_path):

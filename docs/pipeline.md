@@ -82,8 +82,20 @@ jobs keep their prompts unchanged. Storyboard receives the series' active
 image/logo assets and may only reference those ids in `SeriesAsset` scenes;
 `visual.image_style` is appended to diffusion prompts.
 
-Research uses **supplied excerpts**, not HTTP fetch. Quotes must appear in
-excerpts. Script may not cite unverified claims.
+Research uses **supplied excerpts**, not HTTP fetch. `LocalProvider.research`
+sends one `Research` request per source in one model load (`{brief, source}`,
+never the whole source list). Every quote must be found in its source's
+excerpt by `locate_quote`, which compares after NFKC normalisation, flattening
+curly quotes/dashes/ellipses (`QUOTE_EQUIVALENTS`), case folding, collapsing
+whitespace and dropping it around dashes; the claim stores the excerpt's exact
+spelling, never the model's. A source with an unlocatable quote is re-asked in
+`RESEARCH_RETRY_ROUNDS` (1) further batches carrying `unsupported_quotes` and
+a note; one still unlocatable raises `ReviewRequired` naming the source and
+quote, with `{unsupported: {source_id: [quotes]}}` details. The provider
+assigns claim ids `c1..cN` across sources and sets each claim's `source_id`
+from the request, so duplicate or wrong ids from the model cannot leak. Zero
+claims overall is `ReviewRequired`. Per-source summaries are joined with blank
+lines. Script may not cite unverified claims.
 
 ## How it is called
 

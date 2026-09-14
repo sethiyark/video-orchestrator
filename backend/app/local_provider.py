@@ -5,6 +5,7 @@ import json
 import math
 import re
 import tempfile
+import unicodedata
 from pathlib import Path
 
 from .artifacts import Artifacts
@@ -40,6 +41,24 @@ WORDS_PER_SECOND = 2.5
 MIN_SCRIPT_COVERAGE = 0.25
 # Extra batches that re-ask only the sections that came back too short.
 SCRIPT_RETRY_ROUNDS = 1
+# Extra batches that re-ask only the sources whose quotes could not be located.
+RESEARCH_RETRY_ROUNDS = 1
+# Punctuation a model flattens when copying a quote; not evidence of fabrication.
+QUOTE_EQUIVALENTS = str.maketrans(
+    {
+        "\u2018": "'",
+        "\u2019": "'",
+        "\u201a": "'",
+        "\u201c": '"',
+        "\u201d": '"',
+        "\u201e": '"',
+        "\u2013": "-",
+        "\u2014": "-",
+        "\u2212": "-",
+        "\u00a0": " ",
+        "\u2026": "...",
+    }
+)
 
 # Which parts of a job's series snapshot each prompt receives.
 SERIES_SECTIONS = {
@@ -110,6 +129,39 @@ def image_prompt(job, scene):
 
 def sentences(text):
     return [part.strip() for part in re.split(SENTENCE_SPLIT, text) if part.strip()]
+
+
+def normalized_chars(text):
+    """(normalized character, index in ``text``) pairs: quotes and dashes
+    flattened, case folded, whitespace collapsed and dropped around dashes."""
+    pairs = []
+    for index, char in enumerate(text):
+        for out in unicodedata.normalize("NFKC", char).translate(QUOTE_EQUIVALENTS):
+            if out.isspace():
+                if pairs and pairs[-1][0] in (" ", "-"):
+                    continue
+                out = " "
+            elif out == "-" and pairs and pairs[-1][0] == " ":
+                pairs.pop()
+            pairs.append((out.casefold(), index))
+    return pairs
+
+
+def locate_quote(quote, excerpt):
+    """The exact excerpt substring ``quote`` reproduces, or None.
+
+    Quote punctuation, whitespace, and case may differ from the excerpt; the
+    words must not."""
+    wanted = "".join(char for char, _ in normalized_chars(quote)).strip()
+    if not wanted:
+        return None
+    pairs = normalized_chars(excerpt)
+    haystack = "".join(char for char, _ in pairs)
+    start = haystack.find(wanted)
+    if start < 0:
+        return None
+    first, last = pairs[start][1], pairs[start + len(wanted) - 1][1]
+    return excerpt[first : last + 1]
 
 
 def script_body(script):
@@ -406,6 +458,75 @@ class LocalProvider:
         self.check_script_length(job, result)
         return result
 
+    async def research(self, job, brief, sources):
+        """Extract claims one source per request in one model load. Quotes are
+        located in the excerpt (punctuation-tolerant) and stored verbatim from
+        it; a source with an unlocatable quote is re-asked once, then fails
+        closed. The provider owns claim ids and source ids."""
+        instructions = (
+            "Extract discrete factual claims from this ONE source. Each claim needs "
+            "a unique id and an exact supporting quote copied character for "
+            "character from the excerpt. Do not claim outside knowledge."
+        )
+        pending = list(range(len(sources)))
+        outputs = [None] * len(sources)
+        problems = {}
+        provenance = None
+        for attempt in range(RESEARCH_RETRY_ROUNDS + 1):
+            requests = []
+            for index in pending:
+                data = {**brief, "source": sources[index]}
+                if attempt:
+                    data["unsupported_quotes"] = problems[index]
+                    data["note"] = (
+                        "These quotes from your previous answer do not appear in the "
+                        "excerpt. Copy quotes verbatim from the excerpt, or drop the claim."
+                    )
+                requests.append((instructions, data, Research))
+            results = await self.llm_batch("research", job, requests)
+            provenance = results[0]["provenance"]
+            still = []
+            for index, result in zip(pending, results):
+                excerpt = sources[index]["excerpt"]
+                bad = []
+                claims = []
+                for claim in result["claims"]:
+                    quote = locate_quote(claim["quote"], excerpt)
+                    if quote is None:
+                        bad.append(claim["quote"])
+                    claims.append({**claim, "quote": quote or claim["quote"]})
+                outputs[index] = {"summary": result["summary"], "claims": claims}
+                if bad:
+                    problems[index] = bad
+                    still.append(index)
+            pending = still
+            if not pending:
+                break
+        if pending:
+            index = pending[0]
+            raise ReviewRequired(
+                "Research included an unsupported source or quote: source "
+                f"{sources[index]['id']} quote {problems[index][0][:120]!r} is not in "
+                "its excerpt",
+                {"unsupported": {sources[i]["id"]: problems[i] for i in pending}},
+            )
+        claims = []
+        for source, output in zip(sources, outputs):
+            for claim in output["claims"]:
+                claims.append(
+                    {
+                        **claim,
+                        "id": f"c{len(claims) + 1}",
+                        "source_id": source["id"],
+                    }
+                )
+        if not claims:
+            raise ReviewRequired("Research found no claims in the supplied excerpts")
+        summary = "\n\n".join(
+            output["summary"] for output in outputs if output["summary"]
+        )
+        return {"summary": summary, "claims": claims, "provenance": provenance}
+
     async def storyboard(self, job, assets):
         """Plan scenes over numbered script sentences in bounded chunks, then
         assemble the Storyboard with the exact narration text and scene ids."""
@@ -494,24 +615,7 @@ class LocalProvider:
                 raise ReviewRequired(
                     "Local research needs source URLs and excerpts. Create a video with evidence; web discovery is not connected yet."
                 )
-            result = await self.llm(
-                stage,
-                job,
-                "Extract discrete factual claims. Each claim needs a unique id, a source_id, and an exact supporting quote from that source excerpt. Do not claim outside knowledge.",
-                {**brief, "sources": sources},
-                Research,
-            )
-            source_map = {source["id"]: source for source in sources}
-            if len({claim["id"] for claim in result["claims"]}) != len(
-                result["claims"]
-            ):
-                raise ReviewRequired("Research produced duplicate claim ids")
-            for claim in result["claims"]:
-                source = source_map.get(claim["source_id"])
-                if not source or claim["quote"] not in source["excerpt"]:
-                    raise ReviewRequired(
-                        "Research included an unsupported source or quote"
-                    )
+            result = await self.research(job, brief, sources)
             return {**result, "sources": sources, "verified": False}
         if stage == "verification":
             research = output_for(job, "research")

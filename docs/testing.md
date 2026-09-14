@@ -12,7 +12,7 @@ no Hugging Face download, no live Temporal.
 | File | Owns |
 | --- | --- |
 | `test_pipeline.py` | Mock worker, approval, retry, restart, interrupt recovery |
-| `test_local_provider.py` | Grounding, critics (script-only input), storyboard schema and sentence chunks, unverified claims, per-section script chunks and short-section retry |
+| `test_local_provider.py` | Grounding (per-source research, tolerant quote location, quote retry), critics (script-only input), storyboard schema and sentence chunks, unverified claims, per-section script chunks and short-section retry |
 | `test_local_api.py` | Local artifacts, render boundary, config-hash restart |
 | `test_models.py` | Config/device rules, profiles, hub pin + extras, GPU queue, runner kill, child stderr on abort |
 | `test_runtime.py` | Inference child with fake llama.cpp/whisper: batch, repair, truncation retry, leaked-reasoning rejection, grammar bounds, Metal layers, fidelity, WER, parent-pid JSON |

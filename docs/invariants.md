@@ -30,7 +30,9 @@ tests.
 ## Evidence and tools
 
 - Local jobs require source excerpts. URLs are not fetched.
-- Fabricated quotes and unverified-claim scripts fail closed.
+- Fabricated quotes and unverified-claim scripts fail closed. Quote matching
+  tolerates flattened punctuation, whitespace, and case, never changed words;
+  stored quotes are the excerpt's exact text.
 - Narration whose alignment fidelity is below `min_narration_fidelity` fails
   closed; alignment always receives the script text.
 - Inputs over the route's context budget fail closed before a model load.

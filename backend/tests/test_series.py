@@ -333,7 +333,8 @@ def test_glossary_cannot_stand_in_for_evidence(tmp_path):
                     }
                 ],
             }
-        ],
+        ]
+        * 2,
     )
     with pytest.raises(ReviewRequired, match="unsupported"):
         asyncio.run(provider.execute("research", job))
@@ -499,7 +500,8 @@ def test_library_source_counts_for_local_mode_and_quotes_still_checked(tmp_path)
                     }
                 ],
             }
-        ],
+        ]
+        * 2,
     )
     with pytest.raises(ReviewRequired, match="unsupported"):
         asyncio.run(provider.execute("research", job))
