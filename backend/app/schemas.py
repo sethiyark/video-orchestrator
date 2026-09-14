@@ -16,7 +16,7 @@ from pydantic import (
 # a planning opener, or the model narrating the request back in its first lines.
 REASONING_LEAK = re.compile(
     r"</?think>"
-    r"|^\s*(okay|ok|alright|hmm|so)\b[\s,.!]*(let's|let me|i need|i'll|i will|i should)\b"
+    r"|^\s*(okay|ok|alright|hmm|so)\b[\s,.!]*(let me|i need|i'll|i will|i should)\b"
     r"|^\s*(let me|i need to|first, i)\b"
     r"|^.{0,300}\b(the|this) (user|query|request) (provided|asked|requested|is asking|has provided)\b",
     re.IGNORECASE | re.DOTALL,

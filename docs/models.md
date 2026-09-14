@@ -46,8 +46,9 @@ subprocesses, dashboard-triggered setup, operator CLI.
     of at most 6 items of 300 chars); dropped bounds are enforced by pydantic
     validation only. `Script.text`, `Research.summary`, `Metadata.description`,
     and critic items reject leaked reasoning (`schemas.REASONING_LEAK`: think
-    tags, "Okay, let's…"/"First, I…" openers, "the user provided…" in the first
-    300 chars), so it goes through the repair pass instead of becoming output.
+    tags, "Okay, let me…"/"First, I…" openers, "the user provided…" in the
+    first 300 chars), so it goes through the repair pass instead of becoming
+    output. Inclusive narrator openers ("So, let's…") are not flagged.
     `think_toggle` is appended to the system message here. When it is set and
     the GGUF chat template references `enable_thinking` (Qwen3), the child also
     renders that template with `enable_thinking=False`, which pre-fills an empty
