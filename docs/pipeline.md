@@ -84,7 +84,7 @@ narration runtime's boundaries) and planned in chunks of
 one model load. The model receives `{"sentences": [{"n", "text"}]}` and
 returns scenes as `first_sentence`/`last_sentence` + `component` + `props`;
 it never re-emits narration, so output size does not grow with the script.
-The chunk schema requires 1–4 sentences per scene with no gaps or overlaps;
+The chunk schema requires 1–6 sentences per scene (`MAX_SCENE_SENTENCES`) with no gaps or overlaps;
 the provider requires each chunk's scenes to span exactly its sentence
 numbers, then copies the exact `narration_text`, numbers `scene_NNN` ids,
 sets `duration_seconds = max(words / 2.5, 2)`, and validates the assembled

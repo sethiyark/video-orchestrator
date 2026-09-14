@@ -440,7 +440,7 @@ def test_storyboard_plans_sentence_chunks_and_copies_narration(tmp_path):
         + [{"scenes": [card(17, 20)]}],
     )
     complete(job, "script", {"text": text, "claim_ids": ["c1"], "provenance": {}})
-    with pytest.raises(ValueError, match="1-4 sentences"):
+    with pytest.raises(ValueError, match="1-6 sentences"):
         # The chunk schema rejects a 9–16 span (the child repairs it in real runs).
         asyncio.run(provider.execute("storyboard", job))
 

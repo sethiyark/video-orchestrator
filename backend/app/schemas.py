@@ -207,7 +207,7 @@ PlannedScene = Annotated[
     Field(discriminator="component"),
 ]
 
-MAX_SCENE_SENTENCES = 4
+MAX_SCENE_SENTENCES = 6
 
 
 class StoryboardChunk(StrictModel):

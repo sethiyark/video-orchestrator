@@ -13,6 +13,7 @@ from .config import CUDA_ONLY_RUNTIMES
 from .models.hub import ModelHub, ModelNotReady
 from .models.runner import LocalRunner
 from .schemas import (
+    MAX_SCENE_SENTENCES,
     Critic,
     Metadata,
     Outline,
@@ -582,7 +583,7 @@ class LocalProvider:
             "sentence belongs to exactly one scene, in order: the first scene starts at "
             "the first supplied number, each next scene starts right after the previous "
             "one ends, and the last scene ends at the last supplied number. A scene covers "
-            "1 to 4 sentences. Do not repeat the narration; give only sentence numbers, a "
+            f"1 to {MAX_SCENE_SENTENCES} sentences. Do not repeat the narration; give only sentence numbers, a "
             "component, and short props. Use only the allowed data schemas; never generate "
             "code. Prefer DefinitionCard, AnimatedFlowDiagram, and BulletReveal. "
             + (
