@@ -10,6 +10,7 @@ from test_pipeline import wait
 from app.config import Settings
 from app.local_provider import LocalProvider
 from app.main import create_app
+from app.providers import STAGES
 from app.store import Store
 
 
@@ -180,14 +181,13 @@ def test_restart_clears_stages_and_rebases_config_hash(tmp_path):
         stored["stages"][0]["output"] = {"stale": True}
         stored["approved_at"] = "2020-01-01T00:00:00+00:00"
         store.save(stored)
-        blocked = client.post(f"/api/jobs/{job_id}/run")
-        assert blocked.status_code == 409
-        assert "Restart the pipeline" in blocked.json()["detail"]
         restarted = client.post(f"/api/jobs/{job_id}/restart")
         assert restarted.status_code == 200
         body = restarted.json()
         assert body["status"] == "queued"
         assert body["config_hash"] == provider.config_hash
+        assert body["stage_hashes"] == provider.stage_hashes
+        assert body["config_changes"] == []
         assert body["approved_at"] is None
         assert body["error"] is None
         assert all(
@@ -352,7 +352,7 @@ def test_config_override_endpoints(tmp_path, monkeypatch):
         assert provider.config_hash == before
 
 
-def test_config_change_fails_in_flight_job(tmp_path, monkeypatch):
+def test_config_change_is_recorded_and_job_continues(tmp_path, monkeypatch):
     settings, provider, app = _local_client(tmp_path, monkeypatch)
     settings.run_worker = False
     with TestClient(app) as client:
@@ -371,8 +371,30 @@ def test_config_change_fails_in_flight_job(tmp_path, monkeypatch):
             },
         ).json()
         assert job["config_hash"] == provider.config_hash
+        assert job["stage_hashes"] == provider.stage_hashes
+        before = provider.stage_hashes
         client.post("/api/models/fast/config", json={"context_size": 4096})
         assert job["config_hash"] != provider.config_hash
-        blocked = client.post(f"/api/jobs/{job['id']}/run")
-        assert blocked.status_code == 409
-        assert "Restart the pipeline" in blocked.json()["detail"]
+        # Only stages routed to the changed role carry a new fingerprint.
+        changed = {s for s in before if before[s] != provider.stage_hashes[s]}
+        assert changed == {"research", "metadata"}
+        # The run is not blocked; the change is recorded on the job instead.
+        assert client.post(f"/api/jobs/{job['id']}/run").status_code == 200
+        queued = client.get(f"/api/jobs/{job['id']}").json()
+        assert queued["status"] == "queued"
+        assert queued["config_hash"] == provider.config_hash
+        (change,) = queued["config_changes"]
+        assert change["previous"] == job["config_hash"]
+        assert change["current"] == provider.config_hash
+        assert change["pending_stages_affected"] == ["research", "metadata"]
+        # Legacy jobs without stage fingerprints report every pending stage.
+        legacy = client.post(
+            "/api/jobs",
+            json={"title": "Legacy", "sources": job["sources"]},
+        ).json()
+        stored = provider.store.get(legacy["id"])
+        stored["config_hash"], stored["stage_hashes"] = "old", None
+        provider.store.save(stored)
+        assert client.post(f"/api/jobs/{legacy['id']}/run").status_code == 200
+        (change,) = client.get(f"/api/jobs/{legacy['id']}").json()["config_changes"]
+        assert change["pending_stages_affected"] == STAGES

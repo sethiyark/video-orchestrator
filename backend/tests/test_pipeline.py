@@ -2,6 +2,8 @@ import time
 
 from fastapi.testclient import TestClient
 
+from app.config import Settings
+from app.local_provider import ReviewRequired
 from app.main import create_app
 from app.providers import STAGES, MockProvider
 
@@ -134,3 +136,128 @@ def test_queue_is_serial_and_interrupted_jobs_are_recoverable(tmp_path):
         assert provider.calls == [ids[0]] * (len(STAGES) - 1) + [ids[1]] * (
             len(STAGES) - 1
         )
+
+
+class RewindingProvider(MockProvider):
+    """Mock stages, except critique rejects the script ``failures`` times and
+    asks the worker to go back to script with corrections."""
+
+    def __init__(self, failures):
+        super().__init__(0)
+        self.failures = failures
+        self.calls = []
+        self.corrections_seen = []
+
+    async def execute(self, stage, job):
+        self.calls.append(stage)
+        if stage == "script":
+            self.corrections_seen.append((job.get("corrections") or {}).get("script"))
+        if stage == "critique" and self.calls.count("critique") <= self.failures:
+            raise ReviewRequired(
+                "Script did not pass independent critics",
+                {"required_changes": {"clarity": ["Cut the repetition."]}},
+                rewind_to="script",
+            )
+        return await super().execute(stage, job)
+
+
+def local_settings(tmp_path, max_rewinds):
+    settings = Settings()
+    settings.mode = "local"
+    settings.artifact_dir = tmp_path / "artifacts"
+    settings.cache_dir = tmp_path / "models"
+    settings.models.governor.max_rewinds = max_rewinds
+    return settings
+
+
+SOURCES = [
+    {
+        "id": "s1",
+        "url": "https://example.com",
+        "title": "Reference",
+        "excerpt": "DNS maps domain names to IP addresses.",
+    }
+]
+
+
+def test_failed_stage_rewinds_with_corrections_and_continues(tmp_path):
+    provider = RewindingProvider(failures=1)
+    settings = local_settings(tmp_path, max_rewinds=2)
+    with TestClient(
+        create_app(str(tmp_path / "jobs.db"), provider, settings)
+    ) as client:
+        job_id = client.post(
+            "/api/jobs", json={"title": "DNS", "sources": SOURCES}
+        ).json()["id"]
+        client.post(f"/api/jobs/{job_id}/run")
+        job = wait(client, job_id, "awaiting_approval")
+    # Script ran again with the critics' corrections, then critique passed.
+    assert provider.calls.count("research") == 1
+    assert provider.calls.count("script") == 2
+    assert provider.calls.count("critique") == 2
+    assert provider.corrections_seen[0] is None
+    assert provider.corrections_seen[1]["from_stage"] == "critique"
+    assert provider.corrections_seen[1]["required_changes"] == {
+        "clarity": ["Cut the repetition."]
+    }
+    assert job["rewinds"] == {"critique": 1}
+    # Consumed once critique passed.
+    assert job["corrections"] == {}
+    attempts = client.get(f"/api/jobs/{job_id}/attempts").json()
+    assert [a["status"] for a in attempts if a["stage"] == "critique"] == [
+        "failed",
+        "completed",
+    ]
+
+
+def test_rewind_budget_is_bounded_then_requires_review(tmp_path):
+    provider = RewindingProvider(failures=10)
+    settings = local_settings(tmp_path, max_rewinds=2)
+    with TestClient(
+        create_app(str(tmp_path / "jobs.db"), provider, settings)
+    ) as client:
+        job_id = client.post(
+            "/api/jobs", json={"title": "DNS", "sources": SOURCES}
+        ).json()["id"]
+        client.post(f"/api/jobs/{job_id}/run")
+        job = wait(client, job_id, "failed")
+        assert "independent critics" in job["error"]
+        assert job["rewinds"] == {"critique": 2}
+        assert provider.calls.count("script") == 3
+        assert provider.calls.count("critique") == 3
+        # Restart clears the loop state along with the stage outputs.
+        restarted = client.post(f"/api/jobs/{job_id}/restart").json()
+        assert restarted["rewinds"] == {} and restarted["corrections"] == {}
+
+
+def test_mock_mode_never_rewinds(tmp_path):
+    provider = RewindingProvider(failures=1)
+    with TestClient(create_app(str(tmp_path / "jobs.db"), provider)) as client:
+        job_id = client.post("/api/jobs", json={"title": "DNS"}).json()["id"]
+        client.post(f"/api/jobs/{job_id}/run")
+        job = wait(client, job_id, "failed")
+    assert provider.calls.count("script") == 1
+    assert "rewinds" not in job
+
+
+def test_config_change_mid_run_is_recorded_not_blocking(tmp_path):
+    provider = RewindingProvider(failures=0)
+    provider.config_hash = "v1"
+    provider.stage_hashes = {"research": "r1", "script": "s1"}
+    settings = local_settings(tmp_path, max_rewinds=0)
+    with TestClient(
+        create_app(str(tmp_path / "jobs.db"), provider, settings)
+    ) as client:
+        job_id = client.post(
+            "/api/jobs", json={"title": "DNS", "sources": SOURCES}
+        ).json()["id"]
+        # Operator changes the script model before the job runs.
+        provider.config_hash = "v2"
+        provider.stage_hashes = {"research": "r1", "script": "s2"}
+        assert client.post(f"/api/jobs/{job_id}/run").status_code == 200
+        job = wait(client, job_id, "awaiting_approval")
+    assert job["config_hash"] == "v2"
+    (change,) = job["config_changes"]
+    assert (change["previous"], change["current"]) == ("v1", "v2")
+    assert change["pending_stages_affected"] == ["script"]
+    assert provider.calls.count("script") == 1

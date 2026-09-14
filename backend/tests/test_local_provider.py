@@ -277,8 +277,16 @@ def test_critics_have_bounded_independent_rounds(tmp_path):
     provider, runner, job = setup(tmp_path, [deepcopy(critic) for _ in range(5)])
     provider.config.governor.critique_rounds = 1
     complete(job, "script", {"text": "Draft", "claim_ids": ["c1"]})
-    with pytest.raises(ReviewRequired, match="revision budget"):
+    with pytest.raises(ReviewRequired, match="revision budget") as failure:
         asyncio.run(provider.execute("critique", job))
+    # The worker may send the job back to script with the blocking changes.
+    assert failure.value.rewind_to == "script"
+    assert failure.value.details["required_changes"] == {
+        name: ["revise"]
+        for name in ("accuracy", "retention", "clarity", "originality", "style")
+    }
+    assert failure.value.details["score"] == 4
+    assert failure.value.details["review_artifact"]["id"].endswith(".json")
     # Five critics share one model load.
     assert len(runner.calls) == 1
     role, payload = runner.calls[0]
@@ -604,3 +612,53 @@ def test_critics_receive_only_script_text_and_claims(tmp_path):
     asyncio.run(provider.execute("critique", job))
     data = json.loads(runner.calls[0][1]["requests"][0]["messages"][1]["content"])
     assert data["script"] == {"text": "Draft narration.", "claim_ids": ["c1"]}
+
+
+def test_script_rewrites_from_critique_corrections(tmp_path):
+    provider, runner, job = setup(
+        tmp_path,
+        [
+            {"text": words(30, "a"), "claim_ids": ["c1"]},
+            {"text": words(30, "b"), "claim_ids": ["c1"]},
+        ],
+    )
+    complete(job, "verification", {"verified_claims": [{"id": "c1", "text": "DNS"}]})
+    complete(job, "outline", {"sections": [section("Intro", 40), section("Wrap", 40)]})
+    last_draft = {
+        "text": "Old intro.\n\nOld wrap.",
+        "claim_ids": ["c1"],
+        "sections": [
+            {"title": "Intro", "text": "Old intro.", "claim_ids": ["c1"]},
+            {"title": "Wrap", "text": "Old wrap.", "claim_ids": ["c1"]},
+        ],
+    }
+    review = provider.artifacts.put_json(job["id"], {"last_draft": last_draft})
+    job["corrections"] = {
+        "script": {
+            "from_stage": "critique",
+            "attempt": 1,
+            "message": "Script did not pass independent critics",
+            "review_artifact": review,
+            "required_changes": {"clarity": ["Cut the repetition."]},
+        }
+    }
+    result = asyncio.run(provider.execute("script", job))
+    requests = runner.calls[0][1]["requests"]
+    assert len(requests) == 2
+    for index, request in enumerate(requests):
+        assert "failed independent critics" in request["messages"][0]["content"]
+        payload = json.loads(request["messages"][1]["content"])
+        assert payload["required_changes"] == {"clarity": ["Cut the repetition."]}
+        assert payload["previous_attempt"] == last_draft["sections"][index]["text"]
+    assert result["sections"][1]["text"] == words(30, "b")
+
+
+def test_script_without_corrections_keeps_its_prompt(tmp_path):
+    provider, runner, job = setup(tmp_path, [{"text": words(30), "claim_ids": ["c1"]}])
+    complete(job, "verification", {"verified_claims": [{"id": "c1", "text": "DNS"}]})
+    complete(job, "outline", {"sections": [section("Intro", 40)]})
+    asyncio.run(provider.execute("script", job))
+    request = runner.calls[0][1]["requests"][0]
+    assert "failed independent critics" not in request["messages"][0]["content"]
+    payload = json.loads(request["messages"][1]["content"])
+    assert "required_changes" not in payload and "previous_attempt" not in payload
