@@ -23,9 +23,10 @@ Runtime = Literal[
     "diffusers_gguf",
 ]
 
-# Runtimes that may offload to Apple Metal (llama.cpp) or torch MPS (Kokoro, Qwen3-TTS).
-METAL_RUNTIMES = {"llama_cpp", "kokoro", "qwen_tts"}
-CUDA_ONLY_RUNTIMES = {"diffusers", "diffusers_gguf"}
+# Runtimes that may offload to Apple Metal (llama.cpp) or torch MPS
+# (Kokoro, Qwen3-TTS, SDXL). FLUX GGUF stays CUDA-only.
+METAL_RUNTIMES = {"llama_cpp", "kokoro", "qwen_tts", "diffusers"}
+IMAGE_RUNTIMES = {"diffusers", "diffusers_gguf"}
 
 # ModelSpec fields the dashboard may override per role. runtime, extra_repos, and
 # stage routes stay in the hardware profile so validate_routes keeps its meaning.
@@ -124,8 +125,8 @@ class ModelSpec(BaseModel):
             raise ValueError("The embedding runtime uses CPU to preserve GPU capacity")
         if self.device == "metal" and self.runtime not in METAL_RUNTIMES:
             raise ValueError(f"{self.runtime} does not support the metal device")
-        if self.runtime in CUDA_ONLY_RUNTIMES and self.device != "cuda":
-            raise ValueError(f"{self.runtime} requires device: cuda")
+        if self.runtime == "diffusers_gguf" and self.device != "cuda":
+            raise ValueError("diffusers_gguf requires device: cuda")
         return self
 
 
@@ -141,7 +142,7 @@ class Governor(BaseModel):
     max_rewinds: int = Field(default=2, ge=0, le=5)
     min_research_confidence: float = Field(default=0.9, ge=0, le=1)
     max_similarity: float = Field(default=0.9, ge=0, le=1)
-    max_images: int = Field(default=3, ge=0, le=20)
+    max_images: int = Field(default=3, ge=0, le=30)
     # Alignment fails closed when the narration audio drifts from the script.
     min_narration_fidelity: float = Field(default=0.85, ge=0, le=1)
 

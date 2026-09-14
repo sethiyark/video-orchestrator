@@ -19,6 +19,20 @@ def _torch_device(device):
     return "mps" if device == "metal" else device
 
 
+def _place_image_pipeline(pipeline, device):
+    """Move a Diffusers pipeline onto CUDA (with CPU offload), MPS, or CPU."""
+    if device == "cuda":
+        pipeline.enable_model_cpu_offload()
+        pipeline.enable_vae_slicing()
+        pipeline.enable_vae_tiling()
+        return pipeline
+    pipeline.to(device)
+    if device == "mps":
+        pipeline.enable_attention_slicing()
+        pipeline.enable_vae_slicing()
+    return pipeline
+
+
 def _sentences(text):
     return [s for s in re.split(SENTENCE_SPLIT, text) if s.strip()]
 
@@ -329,31 +343,39 @@ def infer(spec, snapshot, payload, extras=None):
     if runtime in ("diffusers", "diffusers_gguf"):
         import torch
 
-        if spec["device"] != "cuda" or not torch.cuda.is_available():
+        device = _torch_device(spec["device"])
+        if runtime == "diffusers_gguf" or device == "cuda":
+            if spec["device"] != "cuda" or not torch.cuda.is_available():
+                raise ValueError(
+                    "Image generation requires the configured CUDA host; disable images on CPU hosts"
+                )
+        elif device == "mps" and not torch.backends.mps.is_available():
             raise ValueError(
-                "Image generation requires the configured CUDA host; disable images on CPU hosts"
+                "Image generation requires Apple Metal (MPS); disable images if this host has none"
             )
+        dtype = torch.float32 if device == "cpu" else torch.float16
         generator = torch.Generator("cpu").manual_seed(42)
         if runtime == "diffusers":
             from diffusers import StableDiffusionXLPipeline
 
-            pipeline = StableDiffusionXLPipeline.from_pretrained(
-                str(root),
-                torch_dtype=torch.float16,
-                variant="fp16",
-                use_safetensors=True,
-                local_files_only=True,
-            )
-            pipeline.enable_model_cpu_offload()
-            pipeline.enable_vae_slicing()
-            pipeline.enable_vae_tiling()
-            image = pipeline(
-                payload["prompt"],
-                width=768,
-                height=768,
-                num_inference_steps=25,
-                generator=generator,
-            ).images[0]
+            load = {
+                "torch_dtype": dtype,
+                "use_safetensors": True,
+                "local_files_only": True,
+            }
+            if dtype != torch.float32:
+                load["variant"] = "fp16"
+            pipeline = StableDiffusionXLPipeline.from_pretrained(str(root), **load)
+            _place_image_pipeline(pipeline, device)
+            kwargs = {
+                "width": 768,
+                "height": 768,
+                "num_inference_steps": spec["steps"],
+                "generator": generator,
+            }
+            if spec["steps"] <= 4:
+                kwargs["guidance_scale"] = 0.0
+            image = pipeline(payload["prompt"], **kwargs).images[0]
         else:
             from diffusers import (
                 FluxPipeline,
@@ -385,9 +407,7 @@ def infer(spec, snapshot, payload, extras=None):
                 torch_dtype=torch.bfloat16,
                 local_files_only=True,
             )
-            pipeline.enable_model_cpu_offload()
-            pipeline.enable_vae_slicing()
-            pipeline.enable_vae_tiling()
+            _place_image_pipeline(pipeline, device)
             image = pipeline(
                 payload["prompt"],
                 width=768,

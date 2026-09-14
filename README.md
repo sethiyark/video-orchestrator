@@ -65,12 +65,12 @@ Configured roles (defaults in `models.yaml`):
 - **narration:** Kokoro-82M for sentence-chunked WAV narration. The CUDA profile uses Qwen3-TTS 0.6B (preset English speaker).
 - **alignment:** faster-whisper large-v3-turbo (int8, CPU) for timestamps plus a script-vs-transcript fidelity score. The CUDA profile uses a CTC forced aligner on the known script instead.
 - **embeddings:** Qwen3-Embedding-0.6B on CPU for comparison with previous scripts.
-- **images:** optional FLUX.1-schnell GGUF (Q4_K_S transformer + GGUF T5 encoder, CPU offload, 4 steps). CUDA only; disabled by default.
+- **images:** optional stills for `ImagePan`. The CUDA profile uses FLUX.1-schnell GGUF (Q4_K_S transformer + GGUF T5 encoder, CPU offload, 4 steps). The Mac profile uses SDXL-Turbo on Metal (4 steps, guidance 0). Disabled in the default CPU `models.yaml`.
 
 Hardware profiles are selected with `MODEL_CONFIG` and are sized for 16 GB RAM with an 8 GB GPU or an Apple Silicon laptop:
 
 ```sh
-make dev-local-mac    # MODEL_CONFIG=config/models.mac.yaml   (Metal, images off)
+make dev-local-mac    # MODEL_CONFIG=config/models.mac.yaml   (Metal, SDXL-Turbo images)
 make dev-local-cuda   # MODEL_CONFIG=config/models.cuda-8gb.yaml (CUDA, images on)
 ```
 
@@ -132,7 +132,7 @@ Start real local inference:
 PIPELINE_MODE=local .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8091
 ```
 
-For optional images, install `uv sync --extra llm --extra audio --extra embeddings --extra images`, set `images_enabled: true` (the CUDA profile does), and prepare `images`; the download pins the transformer GGUF, the GGUF T5 encoder, and the FLUX.1-schnell base files in one manifest. Images use the same exclusive inference queue and require CUDA. Measure RAM on the host during CPU offload; switch the transformer file to Q3_K_S if 16 GB is short. The current implementation uses Diffusers directly; ComfyUI is not connected.
+For optional images, install `uv sync --extra llm --extra audio --extra embeddings --extra images`, keep `images_enabled: true` (both hardware profiles do), and prepare `images`. CUDA downloads the FLUX transformer GGUF, GGUF T5 encoder, and FLUX.1-schnell base files. Mac downloads SDXL-Turbo and runs it on MPS. Images share the exclusive inference queue with the LLMs. Measure RAM on the host; switch the FLUX transformer file to Q3_K_S if 16 GB is short during CUDA CPU offload. The current implementation uses Diffusers directly; ComfyUI is not connected. FLUX GGUF remains CUDA-only.
 
 ## Pipeline and evidence
 

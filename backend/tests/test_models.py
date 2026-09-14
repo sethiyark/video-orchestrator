@@ -29,6 +29,16 @@ def test_device_and_runtime_rules():
         ModelSpec.model_validate({**base["models"]["alignment"], "device": "metal"})
     with pytest.raises(ValueError, match="cuda"):
         ModelSpec.model_validate({**base["models"]["images"], "device": "cpu"})
+    with pytest.raises(ValueError, match="metal device"):
+        ModelSpec.model_validate({**base["models"]["images"], "device": "metal"})
+    sdxl = {
+        "runtime": "diffusers",
+        "repo_id": "stabilityai/sdxl-turbo",
+        "files": ["*.json"],
+        "device": "metal",
+        "steps": 4,
+    }
+    assert ModelSpec.model_validate(sdxl).device == "metal"
     with pytest.raises(ValueError, match="extra_repos"):
         ModelSpec.model_validate({**base["models"]["images"], "extra_repos": []})
     enabled = {**base, "images_enabled": True}
@@ -60,12 +70,20 @@ def test_device_and_runtime_rules():
 
 
 def test_hardware_profiles_validate():
-    for name in ("models.mac.yaml", "models.cuda-8gb.yaml"):
-        data = yaml.safe_load((ROOT / "config" / name).read_text())
-        config = ModelConfig.model_validate(data)
-        assert config.models["quality"].gpu_layers == -1
-    assert config.images_enabled
-    assert config.governor.critique_rounds == 3
+    mac = ModelConfig.model_validate(
+        yaml.safe_load((ROOT / "config" / "models.mac.yaml").read_text())
+    )
+    cuda = ModelConfig.model_validate(
+        yaml.safe_load((ROOT / "config" / "models.cuda-8gb.yaml").read_text())
+    )
+    assert mac.models["quality"].gpu_layers == -1
+    assert cuda.models["quality"].gpu_layers == -1
+    assert mac.images_enabled
+    assert mac.models["images"].runtime == "diffusers"
+    assert mac.models["images"].device == "metal"
+    assert cuda.images_enabled
+    assert cuda.models["images"].runtime == "diffusers_gguf"
+    assert cuda.governor.critique_rounds == 3
 
 
 def test_hub_downloads_and_verifies_extra_repos(tmp_path):

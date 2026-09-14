@@ -63,8 +63,10 @@ subprocesses, dashboard-triggered setup, operator CLI.
     into script sentences; `method: forced_alignment`; `fidelity =
     exp(mean word log-probability)`.
   - `sentence_transformers`: normalised embeddings on CPU.
-  - `diffusers` (SDXL) / `diffusers_gguf` (FLUX.1-schnell GGUF transformer +
-    GGUF T5 encoder, CPU offload, `steps`, guidance 0): 768×768 PNG, CUDA only.
+  - `diffusers` (SDXL / SDXL-Turbo): 768×768 PNG on `cuda` (CPU offload),
+    `metal` (MPS, attention slicing), or `cpu`. `steps` ≤ 4 uses
+    `guidance_scale` 0 (Turbo). `diffusers_gguf` (FLUX.1-schnell GGUF
+    transformer + GGUF T5 encoder, CPU offload, `steps`, guidance 0): CUDA only.
 - `fidelity.word_error_rate` / `fidelity` — pure-Python word-level Levenshtein.
 - `SetupManager(hub, root, command_factory)` — in-process background setup
   for the dashboard. One `SetupTask` per key: `download:<role>` runs

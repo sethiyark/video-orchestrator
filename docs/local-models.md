@@ -21,18 +21,18 @@ checkpoint resident.
 | `narration` | `hexgrad/Kokoro-82M` (`kokoro`); CUDA profile: `Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice` (`qwen_tts`, `speaker: Ryan`) | Kokoro / Qwen3-TTS | cpu / metal / cuda | <0.5 GB / ~2 GB |
 | `alignment` | `deepdml/faster-whisper-large-v3-turbo-ct2` int8 (`whisper`); CUDA profile: `MahmoudAshraf/mms-300m-1130-forced-aligner` (`ctc_aligner`) | faster-whisper / ctc-forced-aligner | cpu / cuda | ~1.6 GB / ~1.2 GB |
 | `embeddings` | `Qwen/Qwen3-Embedding-0.6B` | sentence-transformers | **CPU only** | ~1.2 GB |
-| `images` | `city96/FLUX.1-schnell-gguf` Q4_K_S + `extra_repos` `text_encoder` (`city96/t5-v1_1-xxl-encoder-gguf` Q5_K_M) and `base` (`black-forest-labs/FLUX.1-schnell` CLIP/VAE/config) | `diffusers_gguf` | **cuda only**, disabled by default | 6.8 GB + 3.4 GB, CPU-offloaded |
+| `images` | CUDA: `city96/FLUX.1-schnell-gguf` Q4_K_S + GGUF T5 + FLUX base. Mac: `stabilityai/sdxl-turbo` | `diffusers_gguf` / `diffusers` | **cuda** (FLUX GGUF) or **metal** (SDXL-Turbo); off in default `models.yaml` | ~6.8 GB FLUX or ~5 GB Turbo |
 
 Peak memory is one GGUF plus its KV cache because `GPUManager` serialises all
-inference. The old SDXL `diffusers` runtime remains available but is not the
-default.
+inference. The Mac profile uses the SDXL `diffusers` runtime on MPS; FLUX GGUF
+stays on the CUDA profile.
 
 Profiles (select with `MODEL_CONFIG`):
 
 - `models.yaml` — CPU-portable; tests load it.
 - `models.mac.yaml` — `device: metal`, `gpu_layers: -1` for both GGUF roles,
-  Kokoro on MPS, images off. `make dev-local-mac` starts the local API and
-  dashboard together.
+  Kokoro on MPS, `images_enabled: true` with SDXL-Turbo on MPS.
+  `make dev-local-mac` starts the local API and dashboard together.
 - `models.cuda-8gb.yaml` — `device: cuda`, `gpu_layers: -1`, Qwen3-TTS,
   CTC forced aligner, `images_enabled: true`. `make dev-local-cuda` starts
   the local API and dashboard together.
@@ -60,18 +60,21 @@ system prompt by the child, which also renders a template that supports
    when you want every stage regenerated with the current models.
 
 Metal needs the Metal wheel of `llama-cpp-python` (README). Whisper and the
-CTC aligner run on CPU or CUDA only.
+CTC aligner run on CPU or CUDA only. SDXL (`diffusers`) runs on MPS; FLUX
+GGUF (`diffusers_gguf`) does not.
 
 ## Invariants
 
 Lower GPU `priority` number runs first. Timeouts cancel waiters. Unload hooks
 always run. Status on `GET /api/models`. Cache directory file lock plus one
-worker per database. `metal` is accepted only for `llama_cpp`, `kokoro`,
-`qwen_tts`; `diffusers*` require `cuda`; embeddings stay on CPU.
+worker per database. `metal` is accepted for `llama_cpp`, `kokoro`,
+`qwen_tts`, and `diffusers`. `diffusers_gguf` requires `cuda`. Embeddings stay
+on CPU.
 
 ## Related tests
 
 `test_device_and_runtime_rules`, `test_hardware_profiles_validate`,
+`test_sdxl_runs_on_metal`,
 `test_hub_downloads_and_verifies_extra_repos`,
 `test_gpu_priority_timeout_cancellation_and_cleanup`,
 `test_runner_kills_child_on_timeout_and_releases_lock`.

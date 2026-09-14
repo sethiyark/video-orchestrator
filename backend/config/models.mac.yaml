@@ -1,6 +1,6 @@
 # Apple Silicon profile: MODEL_CONFIG=config/models.mac.yaml
-# Requires the Metal wheel of llama-cpp-python (see README). Images stay disabled;
-# the GGUF diffusion path is CUDA-only.
+# Requires the Metal wheel of llama-cpp-python (see README). Images use SDXL-Turbo
+# on MPS; FLUX GGUF stays on the CUDA profile.
 models:
   fast:
     runtime: llama_cpp
@@ -56,27 +56,18 @@ models:
     - 1_Pooling/*
     device: cpu
   images:
-    runtime: diffusers_gguf
-    repo_id: city96/FLUX.1-schnell-gguf
+    runtime: diffusers
+    repo_id: stabilityai/sdxl-turbo
     files:
-    - flux1-schnell-Q4_K_S.gguf
-    filename: flux1-schnell-Q4_K_S.gguf
-    extra_repos:
-    - name: text_encoder
-      repo_id: city96/t5-v1_1-xxl-encoder-gguf
-      files:
-      - t5-v1_1-xxl-encoder-Q5_K_M.gguf
-      filename: t5-v1_1-xxl-encoder-Q5_K_M.gguf
-    - name: base
-      repo_id: black-forest-labs/FLUX.1-schnell
-      files:
-      - '*.json'
-      - tokenizer/*
-      - tokenizer_2/*
-      - text_encoder/*.safetensors
-      - vae/*.safetensors
-      - scheduler/*
-    device: cuda
+    - '*.json'
+    - scheduler/*
+    - text_encoder/*
+    - text_encoder_2/*
+    - tokenizer/*
+    - tokenizer_2/*
+    - unet/*
+    - vae/*
+    device: metal
     steps: 4
     priority: 40
     timeout_seconds: 1200
@@ -92,14 +83,14 @@ routes:
   alignment: alignment
   similarity: embeddings
   metadata: fast
-images_enabled: false
+images_enabled: true
 governor:
   max_attempts: 3
   critique_rounds: 3
   critic_temperature: 0.3
   min_script_score: 8.5
-  max_rewinds: 2
+  max_rewinds: 5
   min_research_confidence: 0.9
   max_similarity: 0.9
-  max_images: 3
+  max_images: 30
   min_narration_fidelity: 0.85

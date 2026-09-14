@@ -70,8 +70,9 @@ from `POST /api/models/{role}/config[/reset]`.
 
 Embedding runtime must be CPU. GGUF, Kokoro, and GGUF diffusion require
 `filename`. `diffusers_gguf` requires `extra_repos` named `base` and
-`text_encoder`. `metal` only for `llama_cpp`, `kokoro`, `qwen_tts`;
-`diffusers*` only on `cuda`. Model file patterns cannot be absolute or contain
+`text_encoder`. `metal` only for `llama_cpp`, `kokoro`, `qwen_tts`, `diffusers`.
+`diffusers_gguf` requires `device: cuda`. SDXL `diffusers` may use
+`cpu`, `cuda`, or `metal`. Model file patterns cannot be absolute or contain
 `..`. An invalid overlay fails `Settings()`; an invalid override is rejected
 before anything is written.
 

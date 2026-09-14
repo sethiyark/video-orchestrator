@@ -282,6 +282,62 @@ def test_unsupported_runtime_and_cuda_guard(tmp_path):
         )
 
 
+def test_sdxl_runs_on_metal(tmp_path, monkeypatch):
+    saved = []
+
+    class Image:
+        def save(self, path):
+            saved.append(path)
+
+    class Pipeline:
+        @classmethod
+        def from_pretrained(cls, *args, **kwargs):
+            return cls()
+
+        def to(self, device):
+            self.device = device
+            return self
+
+        def enable_attention_slicing(self):
+            pass
+
+        def enable_vae_slicing(self):
+            pass
+
+        def __call__(self, prompt, **kwargs):
+            assert prompt == "diagram"
+            assert kwargs["guidance_scale"] == 0.0
+            assert kwargs["num_inference_steps"] == 4
+            return types.SimpleNamespace(images=[Image()])
+
+    torch = types.ModuleType("torch")
+    torch.float16 = object()
+    torch.float32 = object()
+    torch.Generator = lambda device: types.SimpleNamespace(
+        manual_seed=lambda seed: None
+    )
+    torch.cuda = types.SimpleNamespace(is_available=lambda: False)
+    torch.backends = types.SimpleNamespace(
+        mps=types.SimpleNamespace(is_available=lambda: True)
+    )
+    diffusers = types.ModuleType("diffusers")
+    diffusers.StableDiffusionXLPipeline = Pipeline
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    monkeypatch.setitem(sys.modules, "diffusers", diffusers)
+    out = infer(
+        {"runtime": "diffusers", "device": "metal", "steps": 4},
+        str(tmp_path),
+        {"prompt": "diagram", "output_path": str(tmp_path / "out.png")},
+    )
+    assert out == {
+        "width": 768,
+        "height": 768,
+        "prompt": "diagram",
+        "seed": 42,
+    }
+    assert saved == [str(tmp_path / "out.png")]
+
+
 def test_runtime_main_writes_json_when_parent_pid_mismatches(tmp_path):
     request = tmp_path / "request.json"
     result = tmp_path / "result.json"

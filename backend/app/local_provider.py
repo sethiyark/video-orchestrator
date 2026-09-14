@@ -13,7 +13,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from .artifacts import Artifacts
-from .config import CUDA_ONLY_RUNTIMES
+from .config import IMAGE_RUNTIMES
 from .models.hub import ModelHub, ModelNotReady
 from .models.runner import LocalRunner
 from .rendering import RemotionRenderer, RenderError, timeline, words
@@ -298,7 +298,7 @@ class LocalProvider:
         revisions = {}
         hub = ModelHub(self.settings.cache_dir)
         for role, spec in self.config.models.items():
-            if spec.runtime in CUDA_ONLY_RUNTIMES and not self.config.images_enabled:
+            if spec.runtime in IMAGE_RUNTIMES and not self.config.images_enabled:
                 continue
             try:
                 revisions[role] = hub.resolve(spec)["revision"]

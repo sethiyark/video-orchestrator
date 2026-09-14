@@ -1,7 +1,7 @@
 # Model weights are fetched explicitly with: python -m app.models.cli download ROLE
 # Pin revision to a Hub commit for deployment. Downloads record the resolved commit.
 # This file is the CPU-portable default used by tests. Hardware profiles:
-#   MODEL_CONFIG=config/models.mac.yaml       Apple Silicon (Metal), images off
+#   MODEL_CONFIG=config/models.mac.yaml       Apple Silicon (Metal), SDXL-Turbo images
 #   MODEL_CONFIG=config/models.cuda-8gb.yaml  16 GB RAM + 8 GB NVIDIA, images on
 models:
   fast:

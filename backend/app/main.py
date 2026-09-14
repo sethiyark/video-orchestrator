@@ -20,7 +20,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from .artifacts import Artifacts
-from .config import CUDA_ONLY_RUNTIMES, OVERRIDABLE_FIELDS, RUNTIME_EXTRAS, Settings
+from .config import IMAGE_RUNTIMES, OVERRIDABLE_FIELDS, RUNTIME_EXTRAS, Settings
 from .infra import RedisGateway
 from .local_provider import IntegrationUnavailable, LocalProvider, ReviewRequired
 from .models.hub import ModelHub, ModelNotReady
@@ -525,7 +525,7 @@ def create_app(
                         for stage, selected in settings.models.routes.items()
                         if selected == role
                     ],
-                    "enabled": spec.runtime not in CUDA_ONLY_RUNTIMES
+                    "enabled": spec.runtime not in IMAGE_RUNTIMES
                     or settings.models.images_enabled,
                     "extra": extra,
                     "install_command": f"uv sync --extra {extra}",
@@ -568,7 +568,7 @@ def create_app(
     @app.post("/api/models/{role}/download", status_code=202)
     async def download_model(role: str):
         spec = get_spec(role)
-        if spec.runtime in CUDA_ONLY_RUNTIMES and not settings.models.images_enabled:
+        if spec.runtime in IMAGE_RUNTIMES and not settings.models.images_enabled:
             raise HTTPException(409, "Enable images in the model profile first")
         try:
             snapshot = setup.start_download(role, spec)
