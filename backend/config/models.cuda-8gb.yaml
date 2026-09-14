@@ -97,6 +97,7 @@ governor:
   critique_rounds: 3
   critic_temperature: 0.3
   min_script_score: 8.5
+  max_rewinds: 2
   min_research_confidence: 0.9
   max_similarity: 0.9
   max_images: 3

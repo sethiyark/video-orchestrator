@@ -136,6 +136,9 @@ class Governor(BaseModel):
     critique_rounds: int = Field(default=3, ge=1, le=5)
     critic_temperature: float = Field(default=0.3, ge=0, le=1.5)
     min_script_score: float = Field(default=8.5, ge=0, le=10)
+    # Times the worker may send a failed stage back to an earlier stage with
+    # corrections (e.g. critique → script) before requiring human review.
+    max_rewinds: int = Field(default=2, ge=0, le=5)
     min_research_confidence: float = Field(default=0.9, ge=0, le=1)
     max_similarity: float = Field(default=0.9, ge=0, le=1)
     max_images: int = Field(default=3, ge=0, le=20)
