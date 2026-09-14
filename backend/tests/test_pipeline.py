@@ -68,12 +68,12 @@ def test_retry_resumes_completed_stages(tmp_path):
             super().__init__(delay)
             self.calls = []
 
-        async def execute(self, stage, job):
+        async def execute(self, stage, job, attempt=0):
             self.calls.append(stage)
             if stage == "script" and not self.failed:
                 self.failed = True
                 raise RuntimeError("Temporary provider error")
-            return await super().execute(stage, job)
+            return await super().execute(stage, job, attempt)
 
     provider = FlakyProvider(0)
     with TestClient(create_app(str(tmp_path / "jobs.db"), provider)) as client:
@@ -116,9 +116,9 @@ def test_queue_is_serial_and_interrupted_jobs_are_recoverable(tmp_path):
             super().__init__(delay)
             self.calls = []
 
-        async def execute(self, stage, job):
+        async def execute(self, stage, job, attempt=0):
             self.calls.append(job["id"])
-            return await super().execute(stage, job)
+            return await super().execute(stage, job, attempt)
 
     provider = RecordingProvider(0.01)
     with TestClient(create_app(path, provider)) as client:
@@ -148,7 +148,7 @@ class RewindingProvider(MockProvider):
         self.calls = []
         self.corrections_seen = []
 
-    async def execute(self, stage, job):
+    async def execute(self, stage, job, attempt=0):
         self.calls.append(stage)
         if stage == "script":
             self.corrections_seen.append((job.get("corrections") or {}).get("script"))
@@ -158,7 +158,7 @@ class RewindingProvider(MockProvider):
                 {"required_changes": {"clarity": ["Cut the repetition."]}},
                 rewind_to="script",
             )
-        return await super().execute(stage, job)
+        return await super().execute(stage, job, attempt)
 
 
 def local_settings(tmp_path, max_rewinds):
@@ -238,6 +238,37 @@ def test_mock_mode_never_rewinds(tmp_path):
         job = wait(client, job_id, "failed")
     assert provider.calls.count("script") == 1
     assert "rewinds" not in job
+
+
+def test_local_retries_pass_increasing_attempt_index_to_the_provider(tmp_path):
+    """A deterministic local model reproduces the same bad output on an unvaried
+    retry, so the worker's bounded retry loop (main.py) must tell the provider
+    which attempt it's on rather than replaying an identical request."""
+
+    class FlakyLocalProvider(MockProvider):
+        def __init__(self):
+            super().__init__(0)
+            self.script_attempts = []
+
+        async def execute(self, stage, job, attempt=0):
+            if stage == "script":
+                self.script_attempts.append(attempt)
+                if attempt < 2:
+                    raise RuntimeError("Deterministic model failure")
+            return await super().execute(stage, job, attempt)
+
+    provider = FlakyLocalProvider()
+    settings = local_settings(tmp_path, max_rewinds=0)
+    settings.models.governor.max_attempts = 3
+    with TestClient(
+        create_app(str(tmp_path / "jobs.db"), provider, settings)
+    ) as client:
+        job_id = client.post(
+            "/api/jobs", json={"title": "DNS", "sources": SOURCES}
+        ).json()["id"]
+        client.post(f"/api/jobs/{job_id}/run")
+        wait(client, job_id, "awaiting_approval")
+    assert provider.script_attempts == [0, 1, 2]
 
 
 def test_config_change_mid_run_is_recorded_not_blocking(tmp_path):

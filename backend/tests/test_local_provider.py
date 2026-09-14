@@ -474,6 +474,27 @@ def test_storyboard_plans_sentence_chunks_and_copies_narration(tmp_path):
         asyncio.run(provider.execute("storyboard", job))
 
 
+def test_worker_retry_attempt_shifts_default_llm_seed(tmp_path):
+    """A worker-level retry (main.py's attempt index) must not silently replay the
+    same deterministic request: local inference uses a fixed seed, so an
+    unvaried retry of a validation failure reproduces the identical bad output
+    every time instead of giving the model a real second chance."""
+    text = " ".join(f"Sentence number {i} explains one DNS step." for i in range(1, 5))
+    provider, runner, job = setup(tmp_path, [{"scenes": [card(1, 4)]}])
+    complete(job, "script", {"text": text, "claim_ids": ["c1"], "provenance": {}})
+    asyncio.run(provider.execute("storyboard", job, attempt=0))
+    seed_attempt_0 = runner.calls[0][1]["requests"][0]["seed"]
+
+    runner.outputs = iter([{"scenes": [card(1, 4)]}])
+    runner.calls.clear()
+    asyncio.run(provider.execute("storyboard", job, attempt=2))
+    seed_attempt_2 = runner.calls[0][1]["requests"][0]["seed"]
+
+    assert seed_attempt_0 == 42
+    assert seed_attempt_2 == 44
+    assert seed_attempt_0 != seed_attempt_2
+
+
 def test_script_is_written_per_outline_section_and_stitched(tmp_path):
     provider, runner, job = setup(
         tmp_path,
