@@ -31,6 +31,7 @@ else in `docs/` should describe unbuilt work as current.
 | [providers.md](providers.md) | [`providers.py`](../backend/app/providers.py) | `Provider` protocol and mock |
 | [models.md](models.md) | [`app/models/`](../backend/app/models) | Hub, GPU queue, subprocess runner, CLI |
 | [local-models.md](local-models.md) | `models.yaml`, GPU policy | Roles, 8 GB VRAM, download flow |
+| [rendering.md](rendering.md) | `backend/app/rendering.py`, `renderer/` | Local Remotion/FFmpeg MP4 rendering |
 | [artifacts.md](artifacts.md) | [`artifacts.py`](../backend/app/artifacts.py) | Content-hashed job files |
 | [storage.md](storage.md) | [`app/storage/`](../backend/app/storage) | Local disk vs S3/MinIO |
 | [orchestrator.md](orchestrator.md) | [`app/orchestrator/`](../backend/app/orchestrator) | Temporal health canary |

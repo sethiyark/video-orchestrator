@@ -1,0 +1,19 @@
+{
+  "name": "video-orchestrator-renderer",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.17.1",
+  "scripts": {
+    "setup-browser": "node setup-browser.mjs"
+  },
+  "dependencies": {
+    "@remotion/bundler": "4.0.479",
+    "@remotion/renderer": "4.0.479",
+    "remotion": "4.0.479",
+    "react": "19.1.0",
+    "react-dom": "19.1.0"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}
