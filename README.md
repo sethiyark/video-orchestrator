@@ -177,7 +177,7 @@ Database support and local model adapters are implemented. The full autonomous o
 - No Temporal **video** workflow yet (Phase 1 starts Temporal with a health canary only). No discovery/search connectors, external LLM escalation, YouTube analytics, or publishing scheduler yet.
 - MinIO and Redis run in Compose; local `uvicorn` still defaults to disk artifacts and no Redis.
 - pgvector is installed in the Compose Postgres image; similarity still uses application-side cosine on JSON embeddings until Phase 4.
-- Run `make setup-renderer` to install the local Remotion/FFmpeg renderer and Chrome, then `make render-sample` for a two-minute sample. Local jobs produce H.264/AAC MP4 artifacts at the render stage. See [rendering](docs/rendering.md). No YouTube OAuth/upload adapter is connected; approval remains required.
+- Run `make setup-renderer` to install the local Remotion/FFmpeg renderer, vendored fonts and Chrome, then `make render-sample` for a two-minute, three-chapter sample using every component. Local jobs produce H.264/AAC MP4 artifacts at the render stage with chapter openers, scene transitions, word-highlight captions, and (for series with a brand kit) a logo watermark, intro/outro plates and a ducked music bed. See [rendering](docs/rendering.md). No YouTube OAuth/upload adapter is connected; approval remains required.
 - The human approval gate remains mandatory. A real upload integration must bind approval to an exact rendered artifact and add idempotent upload recovery.
 - No authentication. Keep the API bound to localhost for development.
 
